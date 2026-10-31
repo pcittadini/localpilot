@@ -1,0 +1,60 @@
+# LocalPilot configuration.
+#
+# Copy to ~/.config/localpilot/config.yaml (or point LOCALPILOT_CONFIG at it).
+# Every key is optional: omitted keys keep the built-in defaults shown here.
+# Unknown keys are rejected so typos in security settings fail loudly.
+version: 1
+
+# Workspace root for file access. Empty means the directory LocalPilot is
+# started in, which for Claude Code is the project directory.
+workspace: ""
+
+providers:
+  ollama:
+    base_url: http://localhost:11434
+
+models:
+  default: qwen-local
+  available:
+    - name: qwen-local
+      provider: ollama
+      model: qwen3.5:9b        # any Ollama model tag; nothing is hardcoded
+      temperature: 0.1
+      max_tokens: 2048         # generated-token cap per call
+      context_window: 8192     # sent as num_ctx; input budgets are clamped to fit
+      think: false             # reasoning mode off: faster, fewer tokens
+
+delegation:
+  defaults:
+    enabled: true
+    fallback: claude           # advisory: tells Claude who takes over; LocalPilot never calls a cloud model
+    require_validation: true
+
+  budgets:
+    max_input_tokens: 12000    # clamped to context_window - max_tokens
+    max_output_tokens: 2048
+    max_tool_calls: 8          # enforced from Phase 2 (agent tools)
+    max_iterations: 5          # enforced from Phase 2 (agent tools)
+    timeout_seconds: 60
+
+  policies:
+    - category: extraction
+      enabled: true
+    - category: summarization
+      enabled: true
+    - category: log_analysis
+      enabled: true
+    - category: code_analysis
+      enabled: true
+    - category: documentation
+      enabled: true
+    - category: code_generation
+      enabled: false
+    - category: architecture
+      enabled: false
+    - category: security_review
+      enabled: false
+
+logging:
+  level: info                  # debug, info, warn, error
+  file: ""                     # empty: stderr (never stdout, which carries MCP messages)

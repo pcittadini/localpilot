@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "localpilot": {
+      "command": "localpilot",
+      "args": ["serve"],
+      "env": {
+        "LOCALPILOT_CONFIG": "/path/to/config.yaml"
+      }
+    }
+  }
+}
