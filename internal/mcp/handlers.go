@@ -30,6 +30,9 @@ func (in DelegateInput) Task() agent.Task {
 		OutputFormat: agent.OutputFormat(in.OutputFormat),
 		Context:      taskctx.Request{Files: in.Context.Files},
 	}
+	if in.Tools != nil {
+		task.RestrictTools, task.Tools = true, *in.Tools
+	}
 	for _, r := range in.Context.Ranges {
 		task.Context.Ranges = append(task.Context.Ranges, taskctx.Range{File: r.File, LineStart: r.LineStart, LineEnd: r.LineEnd})
 	}

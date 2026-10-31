@@ -1,0 +1,36 @@
+# LocalPilot project configuration.
+#
+# Place this file at <workspace>/.localpilot/config.yaml to tighten the
+# policy for one repository. A project file can only narrow the global
+# configuration: it can disable categories, remove tools and lower limits,
+# never the reverse. Settings that would widen the policy are ignored with a
+# warning (see `localpilot check`). Providers, models, logging and the
+# workspace cannot be set here at all, and a file that fails to parse
+# disables delegation for the workspace until it is fixed.
+version: 1
+
+delegation:
+  # Lower delegation-wide limits; they also cap any per-category limits.
+  budgets:
+    max_tool_calls: 6
+    timeout_seconds: 45
+
+  policies:
+    # Keep architecture-adjacent work in Claude for this repository.
+    - category: documentation
+      enabled: false
+
+    # Summaries may read files and diffs, nothing else.
+    - category: summarization
+      tools: [read_file, git_diff]
+
+    # Code analysis may use a globally configured model and fewer steps.
+    - category: code_analysis
+      model: qwen-local
+      budgets:
+        max_iterations: 4
+
+  tools:
+    # Never let the local model see commit history in this repository.
+    denied: [git_log]
+    max_result_bytes: 6000

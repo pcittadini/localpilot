@@ -43,12 +43,23 @@ type Result struct {
 	Status     Status      `json:"status" jsonschema:"queued, running, completed, failed, rejected or escalated"`
 	Category   string      `json:"category"`
 	Model      string      `json:"model,omitempty" jsonschema:"logical name of the local model that ran the task"`
+	Policy     *PolicyInfo `json:"policy,omitempty" jsonschema:"the policy decision the task ran under"`
 	Result     *Output     `json:"result,omitempty" jsonschema:"model output; present even on escalation when the model produced something"`
 	Evidence   []Evidence  `json:"evidence,omitempty" jsonschema:"source locations cited by the model, each checked against the workspace and against what the model was shown"`
 	Trace      []ToolUse   `json:"trace,omitempty" jsonschema:"tool calls the local model made, in order"`
 	Metrics    Metrics     `json:"metrics"`
 	Validation Validation  `json:"validation"`
 	Escalation *Escalation `json:"escalation,omitempty" jsonschema:"why the task was not completed locally and what to do next"`
+}
+
+// PolicyInfo reports the policy decision a task ran under.
+type PolicyInfo struct {
+	Version        string   `json:"version" jsonschema:"identifies the effective policy"`
+	Tools          []string `json:"tools" jsonschema:"tools the local model was permitted to call"`
+	MaxToolCalls   int      `json:"max_tool_calls,omitempty"`
+	MaxIterations  int      `json:"max_iterations,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
+	ProjectConfig  string   `json:"project_config,omitempty" jsonschema:"project configuration that narrowed the policy, if any"`
 }
 
 // Output is the model's answer.

@@ -17,6 +17,7 @@ import (
 
 	"github.com/pcittadini/localpilot/internal/config"
 	"github.com/pcittadini/localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/policy"
 	"github.com/pcittadini/localpilot/internal/taskctx"
 	"github.com/pcittadini/localpilot/internal/tools"
 	"github.com/pcittadini/localpilot/internal/workspace"
@@ -120,7 +121,21 @@ func buildRuntime(t *testing.T, p *fakeProvider, ws *workspace.Root, withTools b
 			t.Fatal(err)
 		}
 	}
-	return NewRuntime(cfg, reg, ws, toolReg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return NewRuntime(cfg, reg, ws, toolReg, newEngine(t, cfg, toolReg), slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// newEngine compiles the policy for cfg with the registry's enabled tools.
+func newEngine(t *testing.T, cfg *config.Config, toolReg *tools.Registry) *policy.Engine {
+	t.Helper()
+	var enabled []string
+	if toolReg != nil {
+		enabled = toolReg.Enabled()
+	}
+	e, err := policy.New(cfg, policy.Options{Supported: SupportedCategoryNames(), Known: tools.Known, Enabled: enabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
 }
 
 func codeTask() Task {
@@ -319,13 +334,13 @@ func TestInputBudgetClampedToContextWindow(t *testing.T) {
 	// 2400 - 2048 leaves 352 tokens: too small for the prompt.
 	wantEscalation(t, rt.Execute(context.Background(), codeTask()), StatusRejected, ReasonBudgetExceeded)
 
-	spec, _ := rt.models.Get("")
-	if got := rt.inputBudget(spec, 2048); got != 352 {
-		t.Errorf("inputBudget = %d, want 352", got)
+	req := policy.Request{Category: string(CategoryCodeAnalysis)}
+	if got := rt.policy.Evaluate(req).Budgets.MaxInputTokens; got != 352 {
+		t.Errorf("input budget = %d, want 352", got)
 	}
-	spec.ContextWindow = 0
-	if got := rt.inputBudget(spec, 2048); got != 12000 {
-		t.Errorf("unclamped inputBudget = %d, want 12000", got)
+	rt = newRuntime(t, p, func(c *config.Config) { c.Models.Available[0].ContextWindow = 0 })
+	if got := rt.policy.Evaluate(req).Budgets.MaxInputTokens; got != 12000 {
+		t.Errorf("unclamped input budget = %d, want 12000", got)
 	}
 }
 

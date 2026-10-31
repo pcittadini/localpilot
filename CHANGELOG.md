@@ -15,4 +15,12 @@ All notable changes to this project are documented here. The format follows [Kee
 - Evidence validation: cited lines must exist and must have been shown to the model.
 - Hardened git execution that ignores global/system config and disables programs the repository could configure.
 - Warning when Ollama is reached over plain HTTP on another host.
+- Policy engine: deterministic per-task decisions (model, tools, budgets, timeout) with a policy version in every result; per-category `model`, `tools` and `budgets`.
+- Project configuration (`.localpilot/config.yaml`) that can only narrow the global policy and fails closed when unreadable.
+- `tools` argument on `delegate_task` to narrow tools per request (`[]` for a single tool-free call).
+- `localpilot check` prints the effective policy and warnings.
 - Claude Code skill (`skills/local-delegate`), configuration reference, security model, and contribution guidelines.
+
+### Fixed
+
+- The local model no longer treats caller-supplied excerpts as workspace files to search for.

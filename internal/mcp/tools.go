@@ -10,7 +10,8 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pcittadini/localpilot/internal/agent"
-	"github.com/pcittadini/localpilot/internal/config"
+	"github.com/pcittadini/localpilot/internal/policy"
+	"github.com/pcittadini/localpilot/internal/tools"
 )
 
 // DelegateInput is the delegate_task argument object.
@@ -20,6 +21,7 @@ type DelegateInput struct {
 	Context      ContextInput `json:"context,omitempty" jsonschema:"material the task needs; send the smallest relevant set"`
 	Constraints  []string     `json:"constraints,omitempty" jsonschema:"extra rules for the local model, e.g. 'Provide source evidence'"`
 	OutputFormat string       `json:"output_format,omitempty" jsonschema:"json (default): summary plus findings with verified file/line evidence; text: prose summary only"`
+	Tools        *[]string    `json:"tools,omitempty" jsonschema:"restrict the local model to these read-only tools (a subset of what policy permits for the category); [] disables tools, which is fastest when context already holds everything; omit to allow every permitted tool"`
 }
 
 type ContextInput struct {
@@ -55,21 +57,23 @@ Check "status" in the result. "completed" means the output passed schema and evi
 
 const statusDescription = `Return the latest status and result of a task started with delegate_task. Statuses: queued, running, completed, failed, rejected, escalated. Status is kept in memory for the current server session.`
 
-func delegateTool(cfg *config.Config) (*mcpsdk.Tool, error) {
+func delegateTool(engine *policy.Engine) (*mcpsdk.Tool, error) {
 	schema, err := jsonschema.For[DelegateInput](nil)
 	if err != nil {
 		return nil, fmt.Errorf("delegate_task schema: %w", err)
 	}
-	var enabled []any
-	for _, c := range agent.SupportedCategories() {
-		if cfg.CategoryEnabled(string(c)) {
-			enabled = append(enabled, string(c))
-		}
+	// Offer only the categories policy enables. With none enabled the enum
+	// is left out, so requests still reach the policy engine and get an
+	// explanation instead of a bare schema error.
+	if enabled := engine.EnabledCategories(); len(enabled) > 0 {
+		schema.Properties["category"].Enum = toAny(enabled)
+	} else {
+		cat := schema.Properties["category"]
+		cat.Description += ". No category is currently enabled; every request is rejected with the reason"
 	}
-	if len(enabled) == 0 {
-		return nil, fmt.Errorf("no task category is enabled")
+	if items := schema.Properties["tools"].Items; items != nil {
+		items.Enum = toAny(tools.Known)
 	}
-	schema.Properties["category"].Enum = enabled
 	schema.Properties["output_format"].Enum = []any{string(agent.FormatJSON), string(agent.FormatText)}
 	minLen := 1
 	schema.Properties["objective"].MinLength = &minLen
@@ -100,3 +104,11 @@ func statusTool() *mcpsdk.Tool {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func toAny(list []string) []any {
+	out := make([]any, len(list))
+	for i, v := range list {
+		out[i] = v
+	}
+	return out
+}
