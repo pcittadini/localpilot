@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package agent
 
 import (
@@ -12,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"localpilot/internal/config"
-	"localpilot/internal/models"
-	"localpilot/internal/taskctx"
-	"localpilot/internal/tools"
-	"localpilot/internal/workspace"
+	"github.com/pcittadini/localpilot/internal/config"
+	"github.com/pcittadini/localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/taskctx"
+	"github.com/pcittadini/localpilot/internal/tools"
+	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
 // fakeProvider returns scripted replies and records every request.

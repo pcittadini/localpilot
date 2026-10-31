@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package workspace confines file access to a single project directory.
 //
 // Every path that reaches the filesystem on behalf of a delegated task goes

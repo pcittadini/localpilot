@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package agent
 
 import (
@@ -7,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"localpilot/internal/config"
-	"localpilot/internal/models"
-	"localpilot/internal/taskctx"
+	"github.com/pcittadini/localpilot/internal/config"
+	"github.com/pcittadini/localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/taskctx"
 )
 
 var taskctxTokens = taskctx.EstimateTokens

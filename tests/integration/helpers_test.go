@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package integration holds tests that need a live Ollama server.
 //
 // They are skipped unless LOCALPILOT_OLLAMA_URL is set, e.g.

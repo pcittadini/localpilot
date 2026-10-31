@@ -1,15 +1,28 @@
 # LocalPilot
 
+[![CI](https://github.com/pcittadini/localpilot/actions/workflows/ci.yml/badge.svg)](https://github.com/pcittadini/localpilot/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/pcittadini/localpilot/actions/workflows/codeql.yml/badge.svg)](https://github.com/pcittadini/localpilot/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/pcittadini/localpilot/badge)](https://scorecard.dev/viewer/?uri=github.com/pcittadini/localpilot)
+[![Go Reference](https://pkg.go.dev/badge/github.com/pcittadini/localpilot.svg)](https://pkg.go.dev/github.com/pcittadini/localpilot)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 LocalPilot is a local-first MCP server that lets Claude Code delegate bounded, read-only development tasks to a local LLM served by Ollama. Claude stays the orchestrator; LocalPilot runs the worker, validates what it returns, and tells Claude when to take a task back.
 
-**Status:** Phases 1 (MCP and inference foundation) and 2 (agent runtime and tools) are complete. See [docs/implementation-checklist.md](docs/implementation-checklist.md) for what each phase covers and [docs/decisions.md](docs/decisions.md) for design decisions.
+**Status:** early development (pre-1.0). Phases 1 (MCP and inference foundation) and 2 (agent runtime and tools) are complete; interfaces may still change. See [docs/implementation-checklist.md](docs/implementation-checklist.md) for what each phase covers and [docs/decisions.md](docs/decisions.md) for design decisions.
 
 ## Requirements
 
-- Go 1.25+
-- An Ollama server (local or on your LAN) with a model that supports tool calling, such as `qwen3.5:9b`
+- Go 1.26 or newer (a release that still receives security fixes)
+- git (optional; enables the `git_diff` and `git_log` tools)
+- An [Ollama](https://ollama.com) server with a model that supports tool calling, such as `qwen3.5:9b`. Prefer running it on the same machine: see [Security](#security).
 
-## Build
+## Install
+
+```bash
+go install github.com/pcittadini/localpilot/cmd/localpilot@latest
+```
+
+Or build from a clone:
 
 ```bash
 make build          # writes bin/localpilot
@@ -121,8 +134,8 @@ localpilot delegate --task task.json   # run one delegate_task request locally a
 ## Testing
 
 ```bash
-make test
-make test-integration OLLAMA_URL=http://gpu-box.local:11434 MODEL=qwen3.5:9b
+make ci             # what CI runs: format, vet, staticcheck, govulncheck, race tests
+make test-integration OLLAMA_URL=http://localhost:11434 MODEL=qwen3.5:9b
 ```
 
 The integration suite is skipped when no Ollama server is given. It covers:
@@ -139,7 +152,7 @@ The integration suite is skipped when no Ollama server is given. It covers:
 cmd/localpilot/        CLI entry point (serve, check, delegate, version)
 internal/config/       YAML + environment configuration
 internal/models/       provider interface, Ollama implementation, model registry
-internal/agent/        task runtime, result types, output and evidence validation
+internal/agent/        task runtime, agent loop, result types, output and evidence validation
 internal/tools/        tool registry and read-only tools (files, search, git)
 internal/taskctx/      context resolver and compressor (line numbering, redaction, budgets)
 internal/workspace/    read-only, workspace-confined file access
@@ -148,3 +161,19 @@ configs/default.yaml   documented default configuration
 skills/local-delegate/ Claude Code skill
 tests/integration/     live Ollama and end-to-end tests
 ```
+
+## Security
+
+LocalPilot reads your source code and sends it to the configured Ollama server. Keep these in mind:
+- **Run Ollama on `localhost`** when you can. Ollama's API has no authentication or encryption, so on another host your code crosses the network in clear text. LocalPilot warns when that is the case; use a trusted network, an SSH tunnel or a TLS proxy.
+- **The local model is untrusted.** It can only use the read-only tools you allow, inside the workspace, within budgets. Sensitive files are never readable, and every cited location is verified. Claude should still verify important findings.
+
+See [docs/security.md](docs/security.md) for the threat model, and [SECURITY.md](SECURITY.md) to report a vulnerability privately.
+
+## Contributing
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) first. Changes are tracked in [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+LocalPilot is licensed under the [Apache License 2.0](LICENSE).

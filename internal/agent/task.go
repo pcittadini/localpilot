@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package agent executes delegated tasks against a local model.
 package agent
 
@@ -6,7 +9,7 @@ import (
 	"fmt"
 	"sync"
 
-	"localpilot/internal/taskctx"
+	"github.com/pcittadini/localpilot/internal/taskctx"
 )
 
 type Category string

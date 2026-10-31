@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package taskctx
 
 import (
@@ -7,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"localpilot/internal/workspace"
+	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
 func newWorkspace(t *testing.T, files map[string]string) *workspace.Root {

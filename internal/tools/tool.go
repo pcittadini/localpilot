@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package tools implements the read-only capabilities a local model may call
 // while working on a delegated task.
 //

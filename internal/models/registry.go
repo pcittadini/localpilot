@@ -1,9 +1,12 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package models
 
 import (
 	"fmt"
 
-	"localpilot/internal/config"
+	"github.com/pcittadini/localpilot/internal/config"
 )
 
 // Spec binds a configured model to the provider that serves it.

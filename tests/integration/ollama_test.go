@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package integration
 
 import (
@@ -8,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/models"
 )
 
 func newOllama(t *testing.T) (*models.Ollama, string) {

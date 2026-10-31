@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package models
 
 import (
@@ -39,6 +42,21 @@ func NewOllama(baseURL string, client *http.Client) (*Ollama, error) {
 }
 
 func (o *Ollama) Name() string { return "ollama" }
+
+// Insecure reports whether requests leave this machine unencrypted: the
+// server is reached over plain HTTP on a host other than loopback. Ollama's
+// API has no authentication, and requests carry workspace source code.
+func (o *Ollama) Insecure() bool {
+	if o.base.Scheme != "http" {
+		return false
+	}
+	host := o.base.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip == nil || !ip.IsLoopback()
+}
 
 // Wire types for the Ollama API.
 
@@ -146,7 +164,7 @@ func (o *Ollama) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error
 	for _, t := range req.Tools {
 		body.Tools = append(body.Tools, ollamaTool{
 			Type:     "function",
-			Function: ollamaFunction{Name: t.Name, Description: t.Description, Parameters: t.Parameters},
+			Function: ollamaFunction(t),
 		})
 	}
 

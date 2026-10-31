@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package tools
 
 import (
@@ -14,7 +17,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 
-	"localpilot/internal/workspace"
+	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
 // gitRunner executes a fixed set of read-only git subcommands. Arguments are

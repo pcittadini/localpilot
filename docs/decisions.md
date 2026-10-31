@@ -78,3 +78,21 @@ The Ollama client is hand-written on `net/http`.
 **D23. Diffs are annotated with current line numbers.** `git_diff` prefixes unchanged and added lines with their line number in the current file, so the model can cite them without doing hunk arithmetic, and those lines count as viewed.
 
 **D24. The trace is returned to Claude.** `trace` lists each tool call (tool, short target, status, duration, error) so Claude can see what the local model looked at before trusting its answer. Arguments are summarized, not echoed in full, to keep the result small.
+
+## Open-source release
+
+**D25. Apache-2.0 license, SPDX headers.** The license includes an explicit patent grant and contribution terms (section 5), so no CLA or DCO is required. Go sources carry a two-line header naming "The LocalPilot Authors" with an SPDX identifier. Test fixtures under `testdata/` are excluded because tests depend on their exact line numbers.
+
+**D26. Module path `github.com/pcittadini/localpilot`.** This replaces the placeholder from D1, so `go install …/cmd/localpilot@latest` works.
+
+**D27. Supported Go only.** Go patches only its two newest releases. `go.mod` requires Go 1.26 and pins `toolchain go1.26.10`, so older local installations download a patched toolchain automatically. CI tests both supported releases (`oldstable`, `stable`) on Linux and macOS, and runs vet, staticcheck and govulncheck on `stable`.
+
+**D28. CI supply-chain hygiene.**
+- Every third-party action is pinned to a full commit SHA, with the version in a comment. Dependabot keeps the pins and Go modules current.
+- Workflows default to `contents: read`, grant extra permissions per job only where needed, and check out without persisting credentials.
+- Tool versions (staticcheck, govulncheck) are pinned and verified through the Go checksum database.
+- CodeQL (security-extended queries), OpenSSF Scorecard and dependency review run on top of CI.
+
+**D29. Warn about unencrypted remote inference.** Workspace code is sent to Ollama, whose API has no authentication or TLS. `serve` and `check` warn when the server is reached over plain HTTP on a non-loopback host, without blocking it: a trusted LAN is a legitimate setup.
+
+**D30. No personal infrastructure in the repository.** Examples use `localhost` or a placeholder host. Development hostnames, IPs and custom model tags stay out of code, tests and history.

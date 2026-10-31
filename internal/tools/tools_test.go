@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package tools
 
 import (
@@ -12,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"localpilot/internal/workspace"
+	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
 func writeFiles(t *testing.T, dir string, files map[string]string) {

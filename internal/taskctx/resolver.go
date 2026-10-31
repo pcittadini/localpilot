@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package taskctx turns the context references in a delegation request into
 // the deterministic, budgeted text package sent to the local model.
 //
@@ -10,7 +13,7 @@ import (
 	"fmt"
 	"strings"
 
-	"localpilot/internal/workspace"
+	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
 // ErrBudget means the resolved context does not fit the token budget.

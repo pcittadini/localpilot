@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package mcp
 
 import (
@@ -6,8 +9,8 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"localpilot/internal/agent"
-	"localpilot/internal/taskctx"
+	"github.com/pcittadini/localpilot/internal/agent"
+	"github.com/pcittadini/localpilot/internal/taskctx"
 )
 
 type handlers struct {

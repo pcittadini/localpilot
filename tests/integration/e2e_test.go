@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package integration
 
 import (
@@ -17,7 +20,7 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"localpilot/internal/agent"
+	"github.com/pcittadini/localpilot/internal/agent"
 )
 
 // syncBuffer collects the server's stderr safely across goroutines.

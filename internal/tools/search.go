@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package tools
 
 import (
@@ -11,7 +14,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 
-	"localpilot/internal/taskctx"
+	"github.com/pcittadini/localpilot/internal/taskctx"
 )
 
 const maxMatchLineChars = 200

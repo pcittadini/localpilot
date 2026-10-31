@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package agent
 
 import (
@@ -5,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"localpilot/internal/taskctx"
-	"localpilot/internal/workspace"
+	"github.com/pcittadini/localpilot/internal/taskctx"
+	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
 // outputSchema constrains the model's reply when JSON output is requested.

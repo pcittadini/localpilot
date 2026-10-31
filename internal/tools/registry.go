@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package tools
 
 import (
@@ -9,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"localpilot/internal/models"
-	"localpilot/internal/taskctx"
-	"localpilot/internal/workspace"
+	"github.com/pcittadini/localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/taskctx"
+	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
 // Known lists every tool LocalPilot implements, in the order offered to

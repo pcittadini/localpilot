@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package models abstracts local inference providers behind a small
 // provider-independent interface.
 package models

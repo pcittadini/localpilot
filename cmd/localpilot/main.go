@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Command localpilot is a local-first MCP server that lets Claude Code
 // delegate bounded, read-only tasks to local LLMs.
 package main
@@ -16,12 +19,12 @@ import (
 	"syscall"
 	"time"
 
-	"localpilot/internal/agent"
-	"localpilot/internal/config"
-	"localpilot/internal/mcp"
-	"localpilot/internal/models"
-	"localpilot/internal/tools"
-	"localpilot/internal/workspace"
+	"github.com/pcittadini/localpilot/internal/agent"
+	"github.com/pcittadini/localpilot/internal/config"
+	"github.com/pcittadini/localpilot/internal/mcp"
+	"github.com/pcittadini/localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/tools"
+	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
@@ -66,6 +69,8 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+const insecureWarning = "Ollama is reached over plain HTTP on another host: workspace source code sent to the model crosses the network unencrypted and unauthenticated. Use a trusted network, an SSH tunnel or a TLS proxy."
 
 // app holds the wired components shared by every command.
 type app struct {
@@ -192,6 +197,9 @@ func runServe(args []string) error {
 	for name, why := range a.tools.Unavailable() {
 		a.log.Warn("tool unavailable", "tool", name, "reason", why)
 	}
+	if a.ollama.Insecure() {
+		a.log.Warn(insecureWarning, "ollama", a.cfg.Providers.Ollama.BaseURL)
+	}
 
 	// Verify the model in the background: a missing Ollama must not stop
 	// Claude Code from discovering the server; tasks escalate instead.
@@ -283,6 +291,9 @@ func runCheck(args []string) error {
 		return err
 	}
 	fmt.Printf("ollama:    %s (version %s)\n", a.cfg.Providers.Ollama.BaseURL, v)
+	if a.ollama.Insecure() {
+		fmt.Printf("  warning: %s\n", insecureWarning)
+	}
 
 	failed := false
 	for _, r := range checkModels(ctx, a) {

@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package models
 
 import (
@@ -239,5 +242,28 @@ func TestDescribeAndVersion(t *testing.T) {
 	v, err := o.Version(context.Background())
 	if err != nil || v != "0.40.13" {
 		t.Fatalf("version = %q, %v", v, err)
+	}
+}
+
+func TestInsecure(t *testing.T) {
+	for url, want := range map[string]bool{
+		"http://localhost:11434":        false,
+		"http://LOCALHOST:11434":        false,
+		"http://127.0.0.1:11434":        false,
+		"http://127.0.0.2:11434":        false,
+		"http://[::1]:11434":            false,
+		"https://gpu-box.example:443":   false,
+		"http://gpu-box.local:11434":    true,
+		"http://192.168.1.20:11434":     true,
+		"http://[fd00::1]:11434":        true,
+		"http://localhost.evil.example": true,
+	} {
+		o, err := NewOllama(url, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := o.Insecure(); got != want {
+			t.Errorf("Insecure(%s) = %v, want %v", url, got, want)
+		}
 	}
 }

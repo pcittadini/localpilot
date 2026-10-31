@@ -1,0 +1,55 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Security issues must not be filed here**: use
+        [private vulnerability reporting](https://github.com/pcittadini/localpilot/security/advisories/new).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A minimal delegate_task request or command that shows the problem.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: LocalPilot version
+      description: Output of `localpilot version`, or the commit you built.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Ollama version, model tag, MCP client (e.g. Claude Code version).
+      placeholder: |
+        OS: macOS 15
+        Ollama: 0.40.13
+        Model: qwen3.5:9b
+        Client: Claude Code 2.x
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or result
+      description: Relevant stderr logs or the delegate_task result. Remove secrets and private source code first.
+      render: shell
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: Privacy
+      options:
+        - label: I removed secrets, credentials and private source code from this report.
+          required: true

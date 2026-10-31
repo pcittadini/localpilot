@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package mcp
 
 import (
@@ -6,8 +9,8 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"localpilot/internal/agent"
-	"localpilot/internal/config"
+	"github.com/pcittadini/localpilot/internal/agent"
+	"github.com/pcittadini/localpilot/internal/config"
 )
 
 // DelegateInput is the delegate_task argument object.

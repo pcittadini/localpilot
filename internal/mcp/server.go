@@ -1,3 +1,6 @@
+// Copyright 2026 The LocalPilot Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package mcp exposes LocalPilot to MCP clients such as Claude Code.
 package mcp
 
@@ -7,8 +10,8 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"localpilot/internal/agent"
-	"localpilot/internal/config"
+	"github.com/pcittadini/localpilot/internal/agent"
+	"github.com/pcittadini/localpilot/internal/config"
 )
 
 const instructions = `LocalPilot runs bounded, read-only analysis tasks on a local model so they do not consume premium-model usage. Use delegate_task for extraction, summarization, log analysis, code analysis and documentation analysis over a small set of files or excerpts. Only "completed" results passed validation; handle "escalated" or "rejected" tasks yourself, and verify important findings against the cited files.`
