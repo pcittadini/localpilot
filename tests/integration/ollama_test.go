@@ -140,3 +140,33 @@ func TestOllamaHonoursDeadline(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// After tool turns, the runtime asks for the final answer with the output
+// schema and no tools. The model must accept that conversation shape.
+func TestOllamaSchemaAnswerAfterToolTurns(t *testing.T) {
+	o, model := newOllama(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	think := false
+	resp, err := o.Chat(ctx, models.ChatRequest{
+		Model: model,
+		Messages: []models.Message{
+			{Role: models.RoleUser, Content: "What is the default port in config/server.go?"},
+			{Role: models.RoleAssistant, ToolCalls: []models.ToolCall{{ID: "call_1", Name: "read_file", Arguments: json.RawMessage(`{"path":"config/server.go"}`)}}},
+			{Role: models.RoleTool, ToolCallID: "call_1", ToolName: "read_file", Content: "1| package config\n2| const DefaultPort = 4317\n"},
+			{Role: models.RoleUser, Content: "Reply now with your final answer as JSON."},
+		},
+		ResponseSchema: json.RawMessage(`{"type":"object","properties":{"port":{"type":"integer"},"line":{"type":"integer"}},"required":["port","line"]}`),
+		Temperature:    0.1,
+		MaxTokens:      128,
+		Think:          &think,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct{ Port, Line int }
+	if err := json.Unmarshal([]byte(resp.Message.Content), &out); err != nil || out.Port != 4317 || out.Line != 2 {
+		t.Fatalf("reply %q: %+v, %v", resp.Message.Content, out, err)
+	}
+}

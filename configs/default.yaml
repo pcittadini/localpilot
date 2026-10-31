@@ -33,9 +33,9 @@ delegation:
   budgets:
     max_input_tokens: 12000    # clamped to context_window - max_tokens
     max_output_tokens: 2048
-    max_tool_calls: 8          # enforced from Phase 2 (agent tools)
-    max_iterations: 5          # enforced from Phase 2 (agent tools)
-    timeout_seconds: 60
+    max_tool_calls: 8          # tool calls per task
+    max_iterations: 5          # model calls per task; the last one must answer
+    timeout_seconds: 60        # whole task, all model and tool calls
 
   policies:
     - category: extraction
@@ -54,6 +54,23 @@ delegation:
       enabled: false
     - category: security_review
       enabled: false
+
+  tools:
+    # Read-only tools the local model may call. Unknown names are an error.
+    allowed:
+      - read_file
+      - search_code
+      - list_files
+      - git_diff
+      - git_log
+    # Always refused, even if allowed. None of these exist in LocalPilot.
+    denied:
+      - shell
+      - write_file
+      - delete_file
+      - network_request
+    timeout_seconds: 10        # per tool call
+    max_result_bytes: 8000     # per tool result returned to the model
 
 logging:
   level: info                  # debug, info, warn, error

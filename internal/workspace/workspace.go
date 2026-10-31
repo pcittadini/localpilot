@@ -64,23 +64,11 @@ func (r *Root) Path() string { return r.path }
 // to its real location. It returns the real absolute path and the cleaned
 // workspace-relative path that callers should report back.
 func (r *Root) Resolve(p string) (abs, rel string, err error) {
-	if p == "" || strings.ContainsRune(p, 0) {
-		return "", "", fmt.Errorf("%w: %q", ErrInvalid, p)
+	rel, err = r.Clean(p)
+	if err != nil {
+		return "", "", err
 	}
-
-	var joined string
-	if filepath.IsAbs(p) {
-		joined = filepath.Clean(p)
-	} else {
-		joined = filepath.Join(r.path, p)
-	}
-	rel, ok := r.relative(joined)
-	if !ok {
-		return "", "", fmt.Errorf("%w: %s", ErrOutside, p)
-	}
-	if IsSensitive(rel) {
-		return "", "", fmt.Errorf("%w: %s", ErrSensitive, rel)
-	}
+	joined := filepath.Join(r.path, filepath.FromSlash(rel))
 
 	real, err := filepath.EvalSymlinks(joined)
 	if err != nil {
@@ -93,7 +81,31 @@ func (r *Root) Resolve(p string) (abs, rel string, err error) {
 	if IsSensitive(realRel) {
 		return "", "", fmt.Errorf("%w: %s", ErrSensitive, rel)
 	}
-	return real, filepath.ToSlash(rel), nil
+	return real, rel, nil
+}
+
+// Clean validates a path lexically, without touching the filesystem, and
+// returns it workspace-relative with forward slashes ("." for the root). Use
+// it for paths that may not exist on disk, such as git pathspecs; use Resolve
+// before reading anything.
+func (r *Root) Clean(p string) (string, error) {
+	if p == "" || strings.ContainsRune(p, 0) {
+		return "", fmt.Errorf("%w: %q", ErrInvalid, p)
+	}
+	var joined string
+	if filepath.IsAbs(p) {
+		joined = filepath.Clean(p)
+	} else {
+		joined = filepath.Join(r.path, p)
+	}
+	rel, ok := r.relative(joined)
+	if !ok {
+		return "", fmt.Errorf("%w: %s", ErrOutside, p)
+	}
+	if IsSensitive(rel) {
+		return "", fmt.Errorf("%w: %s", ErrSensitive, rel)
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 // ReadFile reads a text file inside the workspace, enforcing all access rules.

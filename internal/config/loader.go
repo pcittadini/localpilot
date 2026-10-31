@@ -81,6 +81,18 @@ type Delegation struct {
 	Defaults Defaults         `yaml:"defaults"`
 	Budgets  Budgets          `yaml:"budgets"`
 	Policies []CategoryPolicy `yaml:"policies"`
+	Tools    ToolPolicy       `yaml:"tools"`
+}
+
+// ToolPolicy controls which tools the local model may call. Denied always
+// wins; allowed names must be tools LocalPilot implements.
+type ToolPolicy struct {
+	Allowed []string `yaml:"allowed"`
+	Denied  []string `yaml:"denied"`
+	// TimeoutSeconds bounds a single tool call.
+	TimeoutSeconds int `yaml:"timeout_seconds"`
+	// MaxResultBytes bounds what one tool call returns to the model.
+	MaxResultBytes int `yaml:"max_result_bytes"`
 }
 
 type Defaults struct {
@@ -148,6 +160,12 @@ func Default() *Config {
 				{Category: "code_generation", Enabled: false},
 				{Category: "architecture", Enabled: false},
 				{Category: "security_review", Enabled: false},
+			},
+			Tools: ToolPolicy{
+				Allowed:        []string{"read_file", "search_code", "list_files", "git_diff", "git_log"},
+				Denied:         []string{"shell", "write_file", "delete_file", "network_request"},
+				TimeoutSeconds: 10,
+				MaxResultBytes: 8000,
 			},
 		},
 		Logging: Logging{Level: "info"},
@@ -300,6 +318,10 @@ func (c *Config) Validate() error {
 	b := c.Delegation.Budgets
 	if b.MaxInputTokens <= 0 || b.MaxOutputTokens <= 0 || b.MaxToolCalls <= 0 || b.MaxIterations <= 0 || b.TimeoutSeconds <= 0 {
 		add("delegation.budgets: all budgets must be positive")
+	}
+
+	if t := c.Delegation.Tools; t.TimeoutSeconds <= 0 || t.MaxResultBytes < 1000 || t.MaxResultBytes > 1<<20 {
+		add("delegation.tools: timeout_seconds must be positive and max_result_bytes within [1000, 1048576]")
 	}
 
 	cats := map[string]bool{}

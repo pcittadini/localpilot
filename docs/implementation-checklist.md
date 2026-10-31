@@ -25,17 +25,26 @@ Acceptance criteria (all tested)
 - [x] A simple task is executed by Ollama: live end-to-end tests
 - [x] Structured output is returned: `structuredContent` with an advertised output schema, decoded and asserted by the tests
 
-## Phase 2: Agent runtime and tools
+## Phase 2: Agent runtime and tools ✅
 
-- [ ] Agent loop (`internal/agent/loop.go`) with iteration and tool-call budgets
-- [ ] Tool registry with explicit permissions (`internal/tools`)
-- [ ] `read_file`, `search_code` (ripgrep, no shell), `list_files`, `git_diff`, `git_log`
-- [ ] Schema validation of tool arguments; unknown tools never executed
-- [ ] Acceptance: model inspects a Go package on its own and returns evidence
+Objectives
+- [x] Agent loop (`internal/agent/loop.go`) with tool-call, iteration, context and time budgets enforced independently of the model
+- [x] Tool registry with explicit permissions (`internal/tools/registry.go`): allowlist and denylist from `delegation.tools`, unknown names are a startup error, per-task permitted set, per-call timeout and output cap, redaction, call records
+- [x] `read_file`, `search_code`, `list_files`, `git_diff`, `git_log`
+- [x] Tool arguments validated against JSON schemas before execution; unknown or unpermitted tools never executed
+- [x] Tool errors returned to the model as tool messages; malformed tool calls recovered
+
+Acceptance criteria (all tested)
+- [x] The local model inspects a Go package on its own: live E2E with no context. It listed the package, read both files, and named both exported functions at the correct lines.
+- [x] The model can request multiple tools: live traces show 3 to 4 calls across several tools
+- [x] Tool calls are validated and executed: registry tests for schema validation, ranges, unknown fields and broken JSON
+- [x] The model receives tool results: loop tests assert tool messages tied to call IDs; live tests show answers that depend on tool output
+- [x] The final response contains evidence: live E2E evidence validated against the workspace and against lines the model saw
+- [x] Unauthorized tools cannot be executed: loop and registry tests for unknown (`shell`), denied, unavailable and unpermitted tools; a git config injection test
 
 ## Phase 3: Policy engine
 
-- [ ] Deterministic `Decision` (model, tools, budgets, timeout) replacing the runtime admission checks
+- [ ] Deterministic `Decision` (model, tools per category, budgets, timeout) replacing the runtime admission checks and the global tool set
 - [ ] Project configuration that can only narrow global permissions
 - [ ] Tool allowlist and denylist
 

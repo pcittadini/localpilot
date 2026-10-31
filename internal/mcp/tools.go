@@ -46,9 +46,9 @@ const delegateDescription = `Delegate a bounded, read-only analysis task to a lo
 Good fits: extracting facts, summarizing files or logs, finding patterns or duplication in a few files, analyzing documentation.
 Do not use for architecture or security decisions, code changes, debugging that needs broad project understanding, or anything involving secrets.
 
-Send the smallest relevant context. Reference workspace files by path or line range instead of pasting their contents; use excerpts only for text that is not in a file.
+The local model can explore the workspace on its own with read-only tools (read file, search code, list files, git diff, git log), so you may name a package or directory in the objective instead of listing every file. When you already know the relevant files, pass them in context: it saves the local model tool calls. Reference files by path or line range instead of pasting their contents; use excerpts only for text that is not in a file.
 
-Check "status" in the result. "completed" means the output passed schema and evidence validation. "escalated" or "rejected" means you must handle the task yourself; "escalation.reason" says why. Cited locations are verified to exist, but verify important findings before acting on them.`
+Check "status" in the result. "completed" means the output passed schema and evidence validation (cited lines exist and were actually shown to the local model). "trace" lists the tool calls it made. "escalated" or "rejected" means you must handle the task yourself; "escalation.reason" says why. Cited locations are verified to exist, but verify important findings before acting on them.`
 
 const statusDescription = `Return the latest status and result of a task started with delegate_task. Statuses: queued, running, completed, failed, rejected, escalated. Status is kept in memory for the current server session.`
 

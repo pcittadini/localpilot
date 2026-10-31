@@ -12,6 +12,10 @@ var (
 	ErrUnavailable = errors.New("model provider unavailable")
 	// ErrModelNotFound means the provider is up but does not serve the model.
 	ErrModelNotFound = errors.New("model not found on provider")
+	// ErrMalformedOutput means the model produced output the provider could
+	// not parse, typically a broken tool call. It is the model's error, not
+	// the server's, so a retry with different input may succeed.
+	ErrMalformedOutput = errors.New("model output could not be parsed")
 )
 
 type Role string

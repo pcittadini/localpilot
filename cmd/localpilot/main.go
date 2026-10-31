@@ -20,6 +20,7 @@ import (
 	"localpilot/internal/config"
 	"localpilot/internal/mcp"
 	"localpilot/internal/models"
+	"localpilot/internal/tools"
 	"localpilot/internal/workspace"
 )
 
@@ -73,6 +74,7 @@ type app struct {
 	ws       *workspace.Root
 	ollama   *models.Ollama
 	registry *models.Registry
+	tools    *tools.Registry
 	runtime  *agent.Runtime
 	closeLog func()
 }
@@ -120,13 +122,25 @@ func newApp(flags commonFlags, jsonLogs bool) (*app, error) {
 		closeLog()
 		return nil, err
 	}
+	tp := cfg.Delegation.Tools
+	toolReg, err := tools.New(context.Background(), ws, tools.Options{
+		Allowed:        tp.Allowed,
+		Denied:         tp.Denied,
+		Timeout:        time.Duration(tp.TimeoutSeconds) * time.Second,
+		MaxResultBytes: tp.MaxResultBytes,
+	})
+	if err != nil {
+		closeLog()
+		return nil, fmt.Errorf("delegation.tools: %w", err)
+	}
 	return &app{
 		cfg:      cfg,
 		log:      log,
 		ws:       ws,
 		ollama:   ollama,
 		registry: reg,
-		runtime:  agent.NewRuntime(cfg, reg, ws, log),
+		tools:    toolReg,
+		runtime:  agent.NewRuntime(cfg, reg, ws, toolReg, log),
 		closeLog: closeLog,
 	}, nil
 }
@@ -173,7 +187,11 @@ func runServe(args []string) error {
 	spec, _ := a.registry.Get("")
 	a.log.Info("localpilot starting",
 		"version", version, "workspace", a.ws.Path(), "config", a.cfg.Source,
-		"ollama", a.cfg.Providers.Ollama.BaseURL, "model", spec.Name, "provider_model", spec.Model)
+		"ollama", a.cfg.Providers.Ollama.BaseURL, "model", spec.Name, "provider_model", spec.Model,
+		"tools", a.tools.Enabled())
+	for name, why := range a.tools.Unavailable() {
+		a.log.Warn("tool unavailable", "tool", name, "reason", why)
+	}
 
 	// Verify the model in the background: a missing Ollama must not stop
 	// Claude Code from discovering the server; tasks escalate instead.
@@ -215,7 +233,7 @@ func checkModels(ctx context.Context, a *app) []modelReport {
 		r.info, r.err = spec.Provider.Describe(ctx, spec.Model)
 		if r.err == nil {
 			if !r.info.Has(models.CapabilityTools) {
-				r.warnings = append(r.warnings, "model does not report tool-calling support; agent tools (Phase 2) will not work")
+				r.warnings = append(r.warnings, "model does not report tool-calling support; it cannot use the agent tools")
 			}
 			if spec.Think != nil && *spec.Think && !r.info.Has(models.CapabilityThinking) {
 				r.warnings = append(r.warnings, "think is enabled but the model does not support thinking")
@@ -254,6 +272,10 @@ func runCheck(args []string) error {
 		source = "(built-in defaults)"
 	}
 	fmt.Printf("LocalPilot %s\nconfig:    %s\nworkspace: %s\n", version, source, a.ws.Path())
+	fmt.Printf("tools:     %s\n", strings.Join(a.tools.Enabled(), ", "))
+	for name, why := range a.tools.Unavailable() {
+		fmt.Printf("           %s unavailable: %s\n", name, why)
+	}
 
 	v, err := a.ollama.Version(ctx)
 	if err != nil {

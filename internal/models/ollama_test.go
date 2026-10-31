@@ -166,7 +166,18 @@ func TestChatErrors(t *testing.T) {
 			io.WriteString(w, `{"error":"out of memory"}`)
 		})
 		_, err := o.Chat(context.Background(), ChatRequest{Model: "x"})
-		if err == nil || errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "out of memory") {
+		if err == nil || errors.Is(err, ErrUnavailable) || errors.Is(err, ErrMalformedOutput) || !strings.Contains(err.Error(), "out of memory") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("malformed tool call", func(t *testing.T) {
+		o := fakeOllama(t, func(w http.ResponseWriter, _ string, _ map[string]any) {
+			w.WriteHeader(http.StatusInternalServerError)
+			io.WriteString(w, `{"error":"XML syntax error on line 4: element <function> closed by </parameter>"}`)
+		})
+		_, err := o.Chat(context.Background(), ChatRequest{Model: "x"})
+		if !errors.Is(err, ErrMalformedOutput) {
 			t.Fatalf("err = %v", err)
 		}
 	})

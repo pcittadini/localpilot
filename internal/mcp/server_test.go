@@ -54,7 +54,7 @@ func connect(t *testing.T, reply string, mutate func(*config.Config)) *mcpsdk.Cl
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server, err := NewServer(agent.NewRuntime(cfg, reg, ws, log), cfg, "test", log)
+	server, err := NewServer(agent.NewRuntime(cfg, reg, ws, nil, log), cfg, "test", log)
 	if err != nil {
 		t.Fatal(err)
 	}

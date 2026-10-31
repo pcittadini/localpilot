@@ -79,9 +79,10 @@ func parseOutput(content string) (Output, []string) {
 
 // checkEvidence verifies every location cited in findings. A citation naming
 // an excerpt label is checked against that excerpt; anything else must be a
-// file in the workspace. Finding paths are normalized to workspace-relative
+// file in the workspace. Cited lines must exist and overlap lines the model
+// was actually shown. Finding paths are normalized to workspace-relative
 // form.
-func checkEvidence(ws *workspace.Root, pkg *taskctx.Package, findings []Finding) ([]Evidence, []string) {
+func checkEvidence(ws *workspace.Root, pkg *taskctx.Package, cov *coverage, findings []Finding) ([]Evidence, []string) {
 	type fileInfo struct {
 		rel   string
 		lines int
@@ -116,9 +117,13 @@ func checkEvidence(ws *workspace.Root, pkg *taskctx.Package, findings []Finding)
 				if ev.LineEnd == 0 {
 					ev.LineEnd = ev.LineStart
 				}
-				if ev.LineStart < 1 || ev.LineEnd < ev.LineStart || ev.LineEnd > info.lines {
+				switch {
+				case ev.LineStart < 1 || ev.LineEnd < ev.LineStart || ev.LineEnd > info.lines:
 					ev.Valid = false
 					ev.Issue = fmt.Sprintf("lines %d-%d are outside the %s (1-%d)", ev.LineStart, ev.LineEnd, source, info.lines)
+				case !cov.seen(ev.File, ev.LineStart, ev.LineEnd):
+					ev.Valid = false
+					ev.Issue = fmt.Sprintf("the model was never shown lines %d-%d of this %s", ev.LineStart, ev.LineEnd, source)
 				}
 			}
 		}

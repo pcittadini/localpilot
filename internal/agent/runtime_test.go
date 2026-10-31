@@ -7,26 +7,33 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"localpilot/internal/config"
 	"localpilot/internal/models"
 	"localpilot/internal/taskctx"
+	"localpilot/internal/tools"
 	"localpilot/internal/workspace"
 )
 
-// fakeProvider returns scripted replies and records the last request.
+// fakeProvider returns scripted replies and records every request.
 type fakeProvider struct {
 	reply func(ctx context.Context, req models.ChatRequest) (models.ChatResponse, error)
 	last  models.ChatRequest
+	reqs  []models.ChatRequest
 	calls int
 }
 
 func (f *fakeProvider) Name() string { return "fake" }
 
 func (f *fakeProvider) Chat(ctx context.Context, req models.ChatRequest) (models.ChatResponse, error) {
+	// Snapshot the messages: the runtime keeps appending to the slice.
+	req.Messages = slices.Clone(req.Messages)
 	f.last = req
+	f.reqs = append(f.reqs, req)
 	f.calls++
 	return f.reply(ctx, req)
 }
@@ -57,6 +64,12 @@ func Handle(token string) bool {
 
 func newRuntime(t *testing.T, p *fakeProvider, mutate func(*config.Config)) *Runtime {
 	t.Helper()
+	return buildRuntime(t, p, testWorkspace(t), false, mutate)
+}
+
+// testWorkspace creates the files the agent tests work on.
+func testWorkspace(t *testing.T) *workspace.Root {
+	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
 		"internal/auth/handler.go": handler,
@@ -77,6 +90,13 @@ func newRuntime(t *testing.T, p *fakeProvider, mutate func(*config.Config)) *Run
 	if err != nil {
 		t.Fatal(err)
 	}
+	return ws
+}
+
+// buildRuntime wires a runtime over ws; withTools adds a tool registry built
+// from the (possibly mutated) configuration.
+func buildRuntime(t *testing.T, p *fakeProvider, ws *workspace.Root, withTools bool, mutate func(*config.Config)) *Runtime {
+	t.Helper()
 	cfg := config.Default()
 	cfg.Delegation.Budgets.TimeoutSeconds = 1
 	if mutate != nil {
@@ -86,7 +106,18 @@ func newRuntime(t *testing.T, p *fakeProvider, mutate func(*config.Config)) *Run
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewRuntime(cfg, reg, ws, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	var toolReg *tools.Registry
+	if withTools {
+		tp := cfg.Delegation.Tools
+		toolReg, err = tools.New(context.Background(), ws, tools.Options{
+			Allowed: tp.Allowed, Denied: tp.Denied,
+			Timeout: time.Duration(tp.TimeoutSeconds) * time.Second, MaxResultBytes: tp.MaxResultBytes,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return NewRuntime(cfg, reg, ws, toolReg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func codeTask() Task {

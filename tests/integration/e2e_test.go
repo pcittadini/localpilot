@@ -261,3 +261,140 @@ func TestEndToEndOtherCategories(t *testing.T) {
 		}
 	})
 }
+
+// gitFixture copies the sample app into a fresh git repository with one
+// commit, so git tools have history that does not depend on this repo.
+func gitFixture(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	src, _ := filepath.Abs(filepath.Join("testdata", "sampleapp"))
+	dst := t.TempDir()
+	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	git := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=Sample Dev", "-c", "user.email=dev@example.com",
+			"-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"}, args...)...)
+		cmd.Dir = dst
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("add", "-A")
+	git("commit", "-q", "-m", "Add users and orders handlers")
+	return dst
+}
+
+func toolNames(trace []agent.ToolUse) []string {
+	var names []string
+	for _, u := range trace {
+		names = append(names, u.Tool+":"+u.Status)
+	}
+	return names
+}
+
+// Phase 2 acceptance: with no files given, the local model inspects a Go
+// package on its own, using several tools, and returns verified evidence.
+func TestEndToEndAgentInspectsPackage(t *testing.T) {
+	ws := gitFixture(t)
+	cs, _ := startServer(t, ws)
+
+	res := call(t, cs, "delegate_task", map[string]any{
+		"category":    "code_analysis",
+		"objective":   "Inspect the Go package in internal/handlers. List every exported function, with the file and line where it is defined.",
+		"constraints": []any{"Provide source evidence"},
+	})
+	if res.Status != agent.StatusCompleted {
+		t.Fatalf("status = %s, escalation = %+v, trace = %v", res.Status, res.Escalation, toolNames(res.Trace))
+	}
+	if len(res.Trace) < 2 || res.Metrics.ToolCalls < 2 || res.Metrics.Iterations < 2 {
+		t.Errorf("expected several tool calls, got trace %v, metrics %+v", toolNames(res.Trace), res.Metrics)
+	}
+	read := false
+	for _, u := range res.Trace {
+		if u.Status == "ok" && (u.Tool == "read_file" || u.Tool == "search_code") {
+			read = true
+		}
+	}
+	if !read {
+		t.Errorf("the model never read code: %v", toolNames(res.Trace))
+	}
+
+	text := res.Result.Summary
+	for _, f := range res.Result.Findings {
+		text += " " + f.Description
+	}
+	for _, fn := range []string{"GetUser", "CreateOrder"} {
+		if !strings.Contains(text, fn) {
+			t.Errorf("result does not mention %s: %q", fn, text)
+		}
+	}
+	// Both functions are defined on line 15 of their files.
+	defs := map[string]bool{}
+	for _, ev := range res.Evidence {
+		if !ev.Valid {
+			t.Errorf("invalid evidence: %+v", ev)
+		}
+		if ev.LineStart <= 15 && ev.LineEnd >= 15 {
+			defs[ev.File] = true
+		}
+	}
+	if !defs["internal/handlers/users.go"] && !defs["internal/handlers/orders.go"] {
+		t.Errorf("no evidence points at a function definition (line 15): %+v", res.Evidence)
+	}
+}
+
+// The model uses git_diff and git_log to describe uncommitted work.
+func TestEndToEndAgentUsesGitTools(t *testing.T) {
+	ws := gitFixture(t)
+	orders := filepath.Join(ws, "internal", "handlers", "orders.go")
+	data, _ := os.ReadFile(orders)
+	changed := strings.Replace(string(data), "\tvar o Order\n", "\tvar o Order\n\tif r.ContentLength > 1<<20 {\n\t\thttp.Error(w, \"body too large\", http.StatusRequestEntityTooLarge)\n\t\treturn\n\t}\n", 1)
+	if err := os.WriteFile(orders, []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cs, _ := startServer(t, ws)
+
+	res := call(t, cs, "delegate_task", map[string]any{
+		"category":  "summarization",
+		"objective": "Summarize the uncommitted changes in this repository, and give the subject of the most recent commit.",
+	})
+	if res.Status != agent.StatusCompleted {
+		t.Fatalf("status = %s, escalation = %+v, trace = %v", res.Status, res.Escalation, toolNames(res.Trace))
+	}
+	used := map[string]bool{}
+	for _, u := range res.Trace {
+		if u.Status == "ok" {
+			used[u.Tool] = true
+		}
+	}
+	if !used["git_diff"] || !used["git_log"] {
+		t.Errorf("expected git_diff and git_log, got %v", toolNames(res.Trace))
+	}
+	summary := strings.ToLower(res.Result.Summary)
+	if !strings.Contains(summary, "orders") && !strings.Contains(summary, "size") && !strings.Contains(summary, "large") {
+		t.Errorf("summary does not describe the change: %q", res.Result.Summary)
+	}
+	if !strings.Contains(summary, "add users and orders handlers") {
+		t.Errorf("summary does not name the last commit: %q", res.Result.Summary)
+	}
+}

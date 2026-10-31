@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-// numberLines renders lines[start-1:end] with explicit line numbers so the
+// NumberLines renders lines[start-1:end] with explicit line numbers so the
 // model can cite exact locations. Blank lines are dropped: the numbers keep
 // every reference accurate while saving tokens.
-func numberLines(lines []string, start, end int) string {
+func NumberLines(lines []string, start, end int) string {
 	width := len(strconv.Itoa(end))
 	var b strings.Builder
 	for n := start; n <= end; n++ {

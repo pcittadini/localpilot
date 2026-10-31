@@ -49,3 +49,32 @@ The `delegate_task` input schema lists only enabled categories, so Claude never 
 - `go.yaml.in/yaml/v3`, the maintained successor of `gopkg.in/yaml.v3`
 
 The Ollama client is hand-written on `net/http`.
+
+## Phase 2
+
+**D17. Tools and the output schema are never sent together.** Tested on the live server: with Ollama's `format` set, the model cannot emit tool calls, and in that probe it described a file it had never read. The loop therefore offers tools without the schema. A final reply that is not valid JSON gets one extra schema-constrained turn with no tools. The last allowed iteration is always a tool-free answer turn.
+
+**D18. Budgets are enforced by the loop, not by the model.**
+- `max_tool_calls` counts every attempt, including denied, invalid and repeated ones; calls past the budget are skipped.
+- `max_iterations` counts model calls.
+- The context budget is tracked per message. A tool result that would not fit is replaced with an "omitted" notice, and the model is asked to answer once less than a reserve is left.
+- `timeout_seconds` covers the whole task. Each tool call also has its own timeout (`delegation.tools.timeout_seconds`).
+- Repeated identical calls are answered from the conversation without re-running.
+- Three consecutive denied, malformed or repeated calls escalate as `invalid_tool_calls`.
+
+**D19. Evidence must overlap lines the model was shown.** Checking that a cited line exists is not enough once the model can see a file listing and guess line numbers. The runtime records every span shown to the model: resolved context, `read_file` ranges, search hits and diff hunk lines. A citation outside them is invalid. This is a cheap, deterministic guard against fabricated locations. Phase 5 still adds content correspondence.
+
+**D20. Native search instead of ripgrep.** The plan names ripgrep. It is not installed on the development machine, and calling it would add an external binary and a flag-injection surface. `search_code` is implemented in Go: RE2 regular expressions run in linear time, there are no command-line arguments to inject, and the file list comes from `git ls-files --cached --others --exclude-standard` so `.gitignore` applies. Outside git it falls back to a walk that skips hidden and dependency directories. A ripgrep backend can sit behind the same tool if large repositories need it.
+
+**D21. Git hardening.** Git tools run fixed subcommands with arguments built by LocalPilot. To stop a repository from making git run programs:
+- `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1` ignore global and system config.
+- `core.fsmonitor=false`, `--no-ext-diff` and `--no-textconv` override repository settings that can name programs.
+- `GIT_OPTIONAL_LOCKS=0` prevents index writes, `protocol.allow=never` blocks network access, and `--literal-pathspecs` disables pathspec magic.
+
+`--relative` and the `.` pathspec keep diffs and logs inside the workspace even when it is a subdirectory of a larger repository. A test plants a script as `core.fsmonitor`, `diff.external`, a textconv driver, `core.pager` and a `diff` alias, and asserts it never runs. Remaining exposure: clean/smudge filters defined in the repository's own `.git/config` (not part of a clone) can still run on `git diff`.
+
+**D22. Malformed tool calls are model errors.** qwen3.5 occasionally writes a tool call with broken XML. Ollama then fails the whole request with HTTP 500 (`XML syntax error …`). The provider maps such parse failures to `ErrMalformedOutput`. The loop records a `malformed` trace entry and retries once with a correction note, then forces a tool-free answer. This was observed and recovered from in the live git test.
+
+**D23. Diffs are annotated with current line numbers.** `git_diff` prefixes unchanged and added lines with their line number in the current file, so the model can cite them without doing hunk arithmetic, and those lines count as viewed.
+
+**D24. The trace is returned to Claude.** `trace` lists each tool call (tool, short target, status, duration, error) so Claude can see what the local model looked at before trusting its answer. Arguments are summarized, not echoed in full, to keep the result small.

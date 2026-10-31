@@ -74,7 +74,7 @@ func Resolve(ws *workspace.Root, req Request, maxTokens int) (*Package, error) {
 			continue
 		}
 		whole[rel] = true
-		lines := splitLines(string(data))
+		lines := SplitLines(string(data))
 		pkg.add(fileItem(rel, lines, 1, len(lines)))
 	}
 
@@ -86,7 +86,7 @@ func Resolve(ws *workspace.Root, req Request, maxTokens int) (*Package, error) {
 		if whole[rel] {
 			continue
 		}
-		lines := splitLines(string(data))
+		lines := SplitLines(string(data))
 		end := r.LineEnd
 		if end == 0 || end > len(lines) {
 			end = len(lines)
@@ -107,8 +107,8 @@ func Resolve(ws *workspace.Root, req Request, maxTokens int) (*Package, error) {
 			return nil, fmt.Errorf("excerpt label %q is used twice; labels must be unique", label)
 		}
 		labels[label] = true
-		lines := splitLines(e.Content)
-		pkg.add(Item{Label: label, LineStart: 1, LineEnd: len(lines), TotalLines: len(lines), Text: numberLines(lines, 1, len(lines))})
+		lines := SplitLines(e.Content)
+		pkg.add(Item{Label: label, LineStart: 1, LineEnd: len(lines), TotalLines: len(lines), Text: NumberLines(lines, 1, len(lines))})
 	}
 
 	for i := range pkg.Items {
@@ -143,7 +143,7 @@ func fileItem(rel string, lines []string, start, end int) Item {
 		LineStart:  start,
 		LineEnd:    end,
 		TotalLines: len(lines),
-		Text:       numberLines(lines, start, end),
+		Text:       NumberLines(lines, start, end),
 	}
 }
 
@@ -170,10 +170,12 @@ func EstimateTokens(s string) int {
 // LineCount returns the number of lines in data, counted the same way line
 // numbers are assigned in rendered context.
 func LineCount(data []byte) int {
-	return len(splitLines(string(data)))
+	return len(SplitLines(string(data)))
 }
 
-func splitLines(s string) []string {
+// SplitLines splits text into lines, normalizing CRLF and ignoring a final
+// newline. Line n of a file is element n-1.
+func SplitLines(s string) []string {
 	s = strings.TrimSuffix(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
 	if s == "" {
 		return nil

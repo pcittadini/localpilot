@@ -281,12 +281,29 @@ func (o *Ollama) do(ctx context.Context, method, path string, body []byte, out a
 		if resp.StatusCode == http.StatusNotFound {
 			return fmt.Errorf("%w: %s (%s)", ErrModelNotFound, model, msg)
 		}
+		if resp.StatusCode == http.StatusInternalServerError && isParseError(msg) {
+			return fmt.Errorf("%w: %s", ErrMalformedOutput, msg)
+		}
 		return fmt.Errorf("ollama: HTTP %d: %s", resp.StatusCode, msg)
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("ollama: decode response: %w", err)
 	}
 	return nil
+}
+
+// parseErrorHints mark Ollama server errors caused by model output it could
+// not parse (for example malformed XML or JSON in a tool call), as opposed
+// to failures of the server itself.
+var parseErrorHints = []string{"syntax error", "tool call", "unexpected end of JSON input", "invalid character"}
+
+func isParseError(msg string) bool {
+	for _, h := range parseErrorHints {
+		if strings.Contains(msg, h) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseNumCtx extracts num_ctx from the text "parameters" block of /api/show.

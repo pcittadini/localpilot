@@ -31,6 +31,7 @@ const (
 	ReasonEvidenceInvalid  = "evidence_invalid"
 	ReasonModelIncomplete  = "model_incomplete"
 	ReasonCancelled        = "cancelled"
+	ReasonInvalidToolCalls = "invalid_tool_calls"
 )
 
 // Result is returned for every delegation, whatever its outcome.
@@ -40,7 +41,8 @@ type Result struct {
 	Category   string      `json:"category"`
 	Model      string      `json:"model,omitempty" jsonschema:"logical name of the local model that ran the task"`
 	Result     *Output     `json:"result,omitempty" jsonschema:"model output; present even on escalation when the model produced something"`
-	Evidence   []Evidence  `json:"evidence,omitempty" jsonschema:"source locations cited by the model, each checked against the workspace"`
+	Evidence   []Evidence  `json:"evidence,omitempty" jsonschema:"source locations cited by the model, each checked against the workspace and against what the model was shown"`
+	Trace      []ToolUse   `json:"trace,omitempty" jsonschema:"tool calls the local model made, in order"`
 	Metrics    Metrics     `json:"metrics"`
 	Validation Validation  `json:"validation"`
 	Escalation *Escalation `json:"escalation,omitempty" jsonschema:"why the task was not completed locally and what to do next"`
@@ -72,13 +74,24 @@ type Evidence struct {
 	Issue     string `json:"issue,omitempty"`
 }
 
+// ToolUse records one tool call made by the local model.
+type ToolUse struct {
+	Tool       string `json:"tool"`
+	Target     string `json:"target,omitempty"`
+	Status     string `json:"status" jsonschema:"ok, failed, invalid_arguments, denied, repeated, malformed (unparseable tool call), omitted (context budget) or skipped (tool budget)"`
+	DurationMS int64  `json:"duration_ms"`
+	Error      string `json:"error,omitempty"`
+}
+
 type Metrics struct {
-	DurationMS    int64 `json:"duration_ms"`
-	InputTokens   int   `json:"input_tokens" jsonschema:"prompt tokens reported by the local model"`
-	OutputTokens  int   `json:"output_tokens" jsonschema:"generated tokens reported by the local model"`
-	ToolCalls     int   `json:"tool_calls"`
-	ContextTokens int   `json:"context_tokens_estimate" jsonschema:"estimated tokens of resolved file and excerpt context"`
-	Redactions    int   `json:"redactions,omitempty" jsonschema:"secrets replaced before the context reached the model"`
+	DurationMS        int64 `json:"duration_ms"`
+	InputTokens       int   `json:"input_tokens" jsonschema:"prompt tokens reported by the local model, summed over all model calls"`
+	OutputTokens      int   `json:"output_tokens" jsonschema:"generated tokens reported by the local model, summed over all model calls"`
+	Iterations        int   `json:"iterations" jsonschema:"model calls made"`
+	ToolCalls         int   `json:"tool_calls" jsonschema:"tool calls counted against the budget"`
+	ToolCallsRejected int   `json:"tool_calls_rejected,omitempty" jsonschema:"tool calls refused as denied, invalid, malformed or repeated"`
+	ContextTokens     int   `json:"context_tokens_estimate" jsonschema:"estimated tokens of resolved file and excerpt context"`
+	Redactions        int   `json:"redactions,omitempty" jsonschema:"secrets replaced before the context reached the model"`
 }
 
 type Validation struct {

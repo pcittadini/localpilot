@@ -148,3 +148,17 @@ func TestNewRejectsMissingRoot(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestClean(t *testing.T) {
+	root, ws, _ := setup(t)
+	for in, want := range map[string]string{".": ".", "pkg/../main.go": "main.go", "deleted/file.go": "deleted/file.go", ws + "/pkg": "pkg"} {
+		if got, err := root.Clean(in); err != nil || got != want {
+			t.Errorf("Clean(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for in, want := range map[string]error{"../x": ErrOutside, ".env": ErrSensitive, "": ErrInvalid} {
+		if _, err := root.Clean(in); !errors.Is(err, want) {
+			t.Errorf("Clean(%q) err = %v, want %v", in, err, want)
+		}
+	}
+}
