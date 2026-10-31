@@ -13,26 +13,30 @@ import (
 
 	"github.com/pcittadini/localpilot/internal/config"
 	"github.com/pcittadini/localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/policy"
 	"github.com/pcittadini/localpilot/internal/taskctx"
 	"github.com/pcittadini/localpilot/internal/tools"
 	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
-// Runtime executes delegated tasks: it admits a task, resolves its context,
-// runs the model (with tools when any are enabled), and validates the result.
+// Runtime executes delegated tasks: it asks the policy engine for a
+// decision, resolves the task's context, runs the model (with the tools the
+// decision permits), and validates the result. Every limit it enforces comes
+// from the decision.
 type Runtime struct {
 	cfg     *config.Config
 	models  *models.Registry
 	ws      *workspace.Root
 	tools   *tools.Registry
+	policy  *policy.Engine
 	tracker *Tracker
 	log     *slog.Logger
 }
 
 // NewRuntime wires a runtime. toolReg may be nil, in which case tasks run as
 // a single model call without tools.
-func NewRuntime(cfg *config.Config, reg *models.Registry, ws *workspace.Root, toolReg *tools.Registry, log *slog.Logger) *Runtime {
-	return &Runtime{cfg: cfg, models: reg, ws: ws, tools: toolReg, tracker: NewTracker(1000), log: log}
+func NewRuntime(cfg *config.Config, reg *models.Registry, ws *workspace.Root, toolReg *tools.Registry, engine *policy.Engine, log *slog.Logger) *Runtime {
+	return &Runtime{cfg: cfg, models: reg, ws: ws, tools: toolReg, policy: engine, tracker: NewTracker(1000), log: log}
 }
 
 // Status returns the last known state of a task.
@@ -61,28 +65,35 @@ func (r *Runtime) Execute(ctx context.Context, t Task) (res Result) {
 	if t.OutputFormat == "" {
 		t.OutputFormat = FormatJSON
 	}
-	if reason, detail := r.admit(t); reason != "" {
+	if reason, detail := validateRequest(t); reason != "" {
 		r.finish(&res, StatusRejected, reason, detail)
 		return res
 	}
 
-	spec, err := r.models.Get("")
+	d := r.policy.Evaluate(policy.Request{Category: string(t.Category), RestrictTools: t.RestrictTools, Tools: t.Tools})
+	res.Policy = &PolicyInfo{Version: d.Version, ProjectConfig: r.policy.ProjectPath(), Tools: []string{}}
+	if !d.Allowed {
+		r.finish(&res, StatusRejected, d.Reason, d.Detail)
+		return res
+	}
+	res.Policy.Tools = d.Tools
+	res.Policy.MaxToolCalls = d.Budgets.MaxToolCalls
+	res.Policy.MaxIterations = d.Budgets.MaxIterations
+	res.Policy.TimeoutSeconds = int(d.Budgets.Timeout.Seconds())
+
+	spec, err := r.models.Get(d.Model)
 	if err != nil {
 		r.finish(&res, StatusRejected, ReasonModelUnavailable, err.Error())
 		return res
 	}
 	res.Model = spec.Name
-	maxOut := r.cfg.Delegation.Budgets.MaxOutputTokens
-	if spec.MaxTokens > 0 && spec.MaxTokens < maxOut {
-		maxOut = spec.MaxTokens
-	}
 
-	s := &session{spec: spec, task: t, maxOut: maxOut, budget: r.inputBudget(spec, maxOut)}
-	if r.tools != nil && r.cfg.Delegation.Budgets.MaxIterations > 1 {
-		s.permitted = r.tools.Enabled()
+	s := &session{spec: spec, task: t, budgets: d.Budgets, maxOut: d.Budgets.MaxOutputTokens, budget: d.Budgets.MaxInputTokens}
+	if r.tools != nil && d.Budgets.MaxIterations > 1 && len(d.Tools) > 0 {
+		s.permitted = d.Tools
 		s.defs = r.tools.Definitions(s.permitted)
 	}
-	s.system = systemPrompt(t, s.permitted, r.cfg.Delegation.Budgets.MaxToolCalls)
+	s.system = systemPrompt(t, s.permitted, d.Budgets.MaxToolCalls)
 
 	overhead := taskctx.EstimateTokens(s.system) + taskctx.EstimateTokens(userPrompt(t, "", len(s.permitted) > 0)) + toolDefTokens(s.defs)
 	if overhead >= s.budget {
@@ -107,7 +118,7 @@ func (r *Runtime) Execute(ctx context.Context, t Task) (res Result) {
 	r.tracker.Put(res)
 
 	// The timeout covers the whole task: every model call and tool call.
-	callCtx, cancel := context.WithTimeout(ctx, time.Duration(r.cfg.Delegation.Budgets.TimeoutSeconds)*time.Second)
+	callCtx, cancel := context.WithTimeout(ctx, d.Budgets.Timeout)
 	defer cancel()
 	content, ok := r.converse(callCtx, ctx, &res, s, userPrompt(t, pkg.Render(), len(s.permitted) > 0))
 	if !ok {
@@ -160,29 +171,16 @@ func (r *Runtime) evaluate(res *Result, t Task, pkg *taskctx.Package, cov *cover
 	}
 }
 
-// admit checks the request against configuration before any work is done.
-func (r *Runtime) admit(t Task) (reason, detail string) {
+// validateRequest checks the parts of a request that are not policy: the
+// policy engine decides category, tools, model and budgets.
+func validateRequest(t Task) (reason, detail string) {
 	switch {
 	case strings.TrimSpace(t.Objective) == "":
 		return ReasonInvalidRequest, "objective must not be empty"
 	case t.OutputFormat != FormatJSON && t.OutputFormat != FormatText:
 		return ReasonInvalidRequest, fmt.Sprintf("unsupported output_format %q (use json or text)", t.OutputFormat)
-	case !t.Category.Supported():
-		return ReasonPolicy, fmt.Sprintf("category %q is not supported for local delegation", t.Category)
-	case !r.cfg.CategoryEnabled(string(t.Category)):
-		return ReasonPolicy, fmt.Sprintf("category %q is disabled by configuration", t.Category)
 	}
 	return "", ""
-}
-
-// inputBudget is the prompt token budget: the configured limit, clamped so
-// prompt plus output fit the model's context window.
-func (r *Runtime) inputBudget(spec models.Spec, maxOut int) int {
-	budget := r.cfg.Delegation.Budgets.MaxInputTokens
-	if spec.ContextWindow > 0 && spec.ContextWindow-maxOut < budget {
-		budget = spec.ContextWindow - maxOut
-	}
-	return budget
 }
 
 func (r *Runtime) finish(res *Result, status Status, reason, detail string) {
@@ -205,6 +203,9 @@ Rules:
 - Be concise and factual.
 
 `, source)
+	if len(t.Context.Excerpts) > 0 {
+		b.WriteString("Excerpts in <context> were supplied in full by the engineer. They are not files in the workspace: do not look for them with tools, and treat each one as the complete material for its label.\n\n")
+	}
 	b.WriteString(toolPromptSection(permitted, maxCalls))
 	fmt.Fprintf(&b, "Task category: %s. %s\n\n", t.Category, categoryGuidance[t.Category])
 	if t.OutputFormat == FormatText {

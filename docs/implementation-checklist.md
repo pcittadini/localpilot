@@ -42,11 +42,22 @@ Acceptance criteria (all tested)
 - [x] The final response contains evidence: live E2E evidence validated against the workspace and against lines the model saw
 - [x] Unauthorized tools cannot be executed: loop and registry tests for unknown (`shell`), denied, unavailable and unpermitted tools; a git config injection test
 
-## Phase 3: Policy engine
+## Phase 3: Policy engine ✅
 
-- [ ] Deterministic `Decision` (model, tools per category, budgets, timeout) replacing the runtime admission checks and the global tool set
-- [ ] Project configuration that can only narrow global permissions
-- [ ] Tool allowlist and denylist
+Objectives
+- [x] YAML policy configuration: per-category `model`, `tools`, `budgets` in the global file; `.localpilot/config.yaml` per project (`internal/policy/config.go`)
+- [x] Task category validation (supported, configured, enabled)
+- [x] Tool allowlists: global allow/deny, per-category subsets, per-request narrowing
+- [x] Model selection per category
+- [x] Token budgets per category, clamped to the model's context window and output limit
+- [x] Timeouts per category (task) and per tool call
+- [x] Deterministic `Decision` with a policy version (`internal/policy/engine.go`, `evaluator.go`)
+
+Acceptance criteria (all tested)
+- [x] Disabled categories are rejected: engine, runtime and MCP tests; live, `security_review` refused, and a project cannot re-enable `architecture`
+- [x] Unknown tools are rejected: in global config (startup error), in category tools (startup error), in requests (schema plus engine); project-supplied names are ignored with warnings
+- [x] Budget limits are enforced: per-category tool-call, iteration and timeout budgets drive the loop (unit tests); live, a project cap of 3 tool calls held
+- [x] Project configuration cannot override global security restrictions: a widening-attempt test, a property test that the effective policy is never wider, a mutation check, a forbidden-keys test, symlink and malformed-file fail-closed tests, and a live hostile-config test
 
 ## Phase 4: Metrics and savings
 

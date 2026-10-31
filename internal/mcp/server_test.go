@@ -19,6 +19,8 @@ import (
 	"github.com/pcittadini/localpilot/internal/agent"
 	"github.com/pcittadini/localpilot/internal/config"
 	"github.com/pcittadini/localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/policy"
+	"github.com/pcittadini/localpilot/internal/tools"
 	"github.com/pcittadini/localpilot/internal/workspace"
 )
 
@@ -57,7 +59,11 @@ func connect(t *testing.T, reply string, mutate func(*config.Config)) *mcpsdk.Cl
 		t.Fatal(err)
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server, err := NewServer(agent.NewRuntime(cfg, reg, ws, nil, log), cfg, "test", log)
+	engine, err := policy.New(cfg, policy.Options{Supported: agent.SupportedCategoryNames(), Known: tools.Known})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(agent.NewRuntime(cfg, reg, ws, nil, engine, log), engine, "test", log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,5 +206,61 @@ func TestDelegateInputValidation(t *testing.T) {
 				t.Fatalf("expected the call to be rejected, got %+v", res)
 			}
 		})
+	}
+}
+
+func TestDelegateToolsArgument(t *testing.T) {
+	cs := connect(t, `{"summary":"ok","findings":[],"complete":true,"limitations":""}`, nil)
+	ctx := context.Background()
+
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	props := res.Tools[0].InputSchema.(map[string]any)["properties"].(map[string]any)
+	items, _ := props["tools"].(map[string]any)["items"].(map[string]any)
+	if items == nil || len(items["enum"].([]any)) != len(tools.Known) {
+		t.Fatalf("tools schema = %v", props["tools"])
+	}
+
+	// An empty list is accepted and means no tools.
+	call, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "delegate_task", Arguments: map[string]any{
+		"category": "summarization", "objective": "Summarize main.go",
+		"context": map[string]any{"files": []any{"main.go"}}, "tools": []any{},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := decodeResult(t, call); out.Status != agent.StatusCompleted || out.Policy == nil || len(out.Policy.Tools) != 0 {
+		t.Errorf("result = %+v", out)
+	}
+
+	// Unknown tool names never reach the runtime.
+	call, err = cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "delegate_task", Arguments: map[string]any{
+		"category": "summarization", "objective": "Summarize", "tools": []any{"shell"},
+	}})
+	if err == nil && !call.IsError {
+		t.Errorf("unknown tool accepted: %+v", call)
+	}
+}
+
+func TestServerStartsWithEveryCategoryDisabled(t *testing.T) {
+	cs := connect(t, `{}`, func(c *config.Config) { c.Delegation.Defaults.Enabled = false })
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := res.Tools[0].InputSchema.(map[string]any)["properties"].(map[string]any)["category"].(map[string]any)
+	if _, ok := cat["enum"]; ok {
+		t.Errorf("with nothing enabled the enum must be omitted: %v", cat)
+	}
+	call, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "delegate_task", Arguments: map[string]any{
+		"category": "summarization", "objective": "Summarize",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := decodeResult(t, call); out.Status != agent.StatusRejected || !strings.Contains(out.Escalation.Detail, "disabled") {
+		t.Errorf("result = %+v", out)
 	}
 }

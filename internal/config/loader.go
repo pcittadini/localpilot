@@ -114,9 +114,18 @@ type Budgets struct {
 	TimeoutSeconds  int `yaml:"timeout_seconds"`
 }
 
+// CategoryPolicy configures one task category. Unset fields inherit the
+// delegation-wide settings.
 type CategoryPolicy struct {
 	Category string `yaml:"category"`
 	Enabled  bool   `yaml:"enabled"`
+	// Model is the logical model that runs this category ("" = default).
+	Model string `yaml:"model,omitempty"`
+	// Tools restricts the category to a subset of the enabled tools. Unset
+	// inherits all enabled tools; an empty list disables tools.
+	Tools *[]string `yaml:"tools,omitempty"`
+	// Budgets overrides delegation budgets for this category (0 = inherit).
+	Budgets Budgets `yaml:"budgets,omitempty"`
 }
 
 type Logging struct {
@@ -336,6 +345,12 @@ func (c *Config) Validate() error {
 			add("delegation.policies[%d].category: duplicate %q", i, p.Category)
 		}
 		cats[p.Category] = true
+		if p.Model != "" && !seen[p.Model] {
+			add("delegation.policies[%d].model: %q is not listed in models.available", i, p.Model)
+		}
+		if b := p.Budgets; b.MaxInputTokens < 0 || b.MaxOutputTokens < 0 || b.MaxToolCalls < 0 || b.MaxIterations < 0 || b.TimeoutSeconds < 0 {
+			add("delegation.policies[%d].budgets: must not be negative (0 inherits)", i)
+		}
 	}
 
 	switch strings.ToLower(c.Logging.Level) {
@@ -364,6 +379,27 @@ func (c *Config) Model(name string) (ModelConfig, bool) {
 		}
 	}
 	return ModelConfig{}, false
+}
+
+// Clone returns a deep copy, so policy merging never mutates the original.
+func (c *Config) Clone() *Config {
+	out := *c
+	out.Models.Available = append([]ModelConfig(nil), c.Models.Available...)
+	for i, m := range out.Models.Available {
+		if m.Think != nil {
+			out.Models.Available[i].Think = Bool(*m.Think)
+		}
+	}
+	out.Delegation.Policies = append([]CategoryPolicy(nil), c.Delegation.Policies...)
+	for i, p := range out.Delegation.Policies {
+		if p.Tools != nil {
+			tools := append([]string{}, *p.Tools...)
+			out.Delegation.Policies[i].Tools = &tools
+		}
+	}
+	out.Delegation.Tools.Allowed = append([]string(nil), c.Delegation.Tools.Allowed...)
+	out.Delegation.Tools.Denied = append([]string(nil), c.Delegation.Tools.Denied...)
+	return &out
 }
 
 // CategoryEnabled reports whether the configuration enables a category.

@@ -8,7 +8,7 @@
 
 LocalPilot is a local-first MCP server that lets Claude Code delegate bounded, read-only development tasks to a local LLM served by Ollama. Claude stays the orchestrator; LocalPilot runs the worker, validates what it returns, and tells Claude when to take a task back.
 
-**Status:** early development (pre-1.0). Phases 1 (MCP and inference foundation) and 2 (agent runtime and tools) are complete; interfaces may still change. See [docs/implementation-checklist.md](docs/implementation-checklist.md) for what each phase covers and [docs/decisions.md](docs/decisions.md) for design decisions.
+**Status:** early development (pre-1.0). Phases 1 (MCP and inference foundation), 2 (agent runtime and tools) and 3 (policy engine) are complete; interfaces may still change. See [docs/implementation-checklist.md](docs/implementation-checklist.md) for what each phase covers and [docs/decisions.md](docs/decisions.md) for design decisions.
 
 ## Requirements
 
@@ -45,7 +45,26 @@ Environment overrides:
 
 For an 8 GB GPU, keep `context_window` at 8192 and `max_tokens` at 2048. That leaves about 6,100 tokens for the prompt, including tool results. LocalPilot rejects larger contexts and omits oversized tool results instead of letting Ollama truncate the prompt.
 
-Check the setup. This verifies the server, the model's capabilities and context size, and runs one structured-output request:
+### Policy
+
+Every task is checked against a deterministic policy before any model runs. The decision fixes the category's model, permitted tools, budgets and timeout, and the runtime enforces exactly that. Per-category settings live under `delegation.policies` (see [configs/default.yaml](configs/default.yaml)):
+
+```yaml
+delegation:
+  policies:
+    - category: code_analysis
+      enabled: true
+      model: qwen-local
+      tools: [read_file, search_code, list_files]
+      budgets: {max_tool_calls: 6, timeout_seconds: 45}
+```
+
+A repository can tighten the policy with `.localpilot/config.yaml` (see [configs/project.example.yaml](configs/project.example.yaml)):
+- It can disable categories, remove tools and lower limits, and nothing more. Widening attempts are ignored with a warning.
+- It cannot set providers, models, logging or the workspace, so a cloned repository can't redirect where its code is sent.
+- A project file that fails to parse disables delegation for that workspace, rather than being silently skipped.
+
+Check the setup. This verifies the server, the model's capabilities and context size, prints the effective policy with any warnings, and runs one structured-output request:
 
 ```bash
 localpilot check
@@ -69,7 +88,7 @@ mkdir -p ~/.claude/skills && cp -R skills/local-delegate ~/.claude/skills/
 
 ## How a task runs
 
-1. LocalPilot checks the request: category enabled, context inside the workspace and within budget.
+1. LocalPilot validates the request and asks the policy engine for a decision: category enabled, which model, which tools, which limits. The context must be inside the workspace and within budget.
 2. The local model gets the objective, any context Claude sent, and the enabled read-only tools:
 
    | Tool | What it does |
@@ -107,8 +126,9 @@ mkdir -p ~/.claude/skills && cp -R skills/local-delegate ~/.claude/skills/
 - `context.files` and `context.ranges` are read by LocalPilot from the workspace. Paths outside the workspace, symlink escapes, sensitive files (`.env`, keys, `.git/`, …), binaries and files over 512 KB are refused.
 - `context.excerpts` holds text that is not in a file. Excerpts are line-numbered and can be cited by their label.
 - `output_format`: `json` (default) returns a summary plus findings with verified evidence. `text` returns prose in `result.summary`.
+- `tools` (optional) narrows the tools for this task to a subset of what policy permits. `[]` disables tools, which is fastest when the context already holds everything. Unknown or unpermitted tools are rejected.
 
-The result follows the architecture plan (§6.4): `task_id`, `status`, `result` (`summary`, `findings`, `complete`, `limitations`), `evidence` (each location checked against the workspace or excerpt and against what the model saw, with `source` and `valid`), `trace` (each tool call: tool, target, status, duration), `metrics` (including `iterations` and `tool_calls`), `validation`, and `escalation`.
+The result follows the architecture plan (§6.4): `task_id`, `status`, `result` (`summary`, `findings`, `complete`, `limitations`), `evidence` (each location checked against the workspace or excerpt and against what the model saw, with `source` and `valid`), `trace` (each tool call: tool, target, status, duration), `policy` (version, permitted tools, limits, and the project config if one applied), `metrics` (including `iterations` and `tool_calls`), `validation`, and `escalation`.
 
 | Status | Meaning |
 |---|---|
@@ -145,6 +165,7 @@ The integration suite is skipped when no Ollama server is given. It covers:
   - With no files given, inspect a Go package using the tools.
   - Describe uncommitted changes and the last commit using `git_diff` and `git_log`.
   - Log analysis, text output and policy refusals.
+  - A project config that narrows tools and budgets (with ignored widening attempts), and a hostile one that fails closed.
 
 ## Layout
 

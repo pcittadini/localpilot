@@ -6,7 +6,8 @@ This document describes what LocalPilot protects, whom it trusts, how it enforce
 
 | Component | Trust | Why |
 |---|---|---|
-| User configuration (global file, environment) | Trusted | Written by the user. Project-level configuration is not loaded until it can only narrow permissions (Phase 3). |
+| User configuration (global file, environment) | Trusted | Written by the user. |
+| Project configuration (`.localpilot/config.yaml`) | **Untrusted** | It arrives with the repository. It can only narrow the global policy, cannot set providers, models, logging or the workspace, and disables delegation if it cannot be parsed. |
 | Claude Code (MCP client) | Trusted orchestrator, validated input | Its requests are still schema-validated and checked against policy. |
 | Local model output | **Untrusted** | It can be wrong, fabricated, or steered by prompt injection. Every tool call it requests is checked; its answer is validated. |
 | Workspace content (code, docs, logs, git history) | **Untrusted** | It may contain prompt-injection text. It is passed to the model as data inside delimited blocks, never as instructions. |
@@ -40,6 +41,11 @@ This document describes what LocalPilot protects, whom it trusts, how it enforce
 
 **Search**
 - Native Go with RE2 regular expressions, which run in linear time. There are no command-line arguments for the model to inject.
+
+**Policy**
+- Every task gets a deterministic decision before any model runs: category, model, tools and limits. No model output takes part in the decision.
+- The project configuration is merged as narrowing only. Widening attempts are ignored and reported, and an unreadable file fails closed.
+- A request may narrow its tools further but never widen them.
 
 **Budgets**
 - Tool calls, model calls, prompt size (clamped to the model's context window) and total task time are all enforced by the runtime.
@@ -76,6 +82,7 @@ Workspace content is sent to the configured Ollama server inside prompts. Ollama
 ## Recommendations for users
 
 - Run Ollama on `localhost`, or reach it through a tunnel or authenticated TLS proxy.
-- Keep `delegation.tools.allowed` as narrow as your work needs, and keep the denylist.
+- Keep `delegation.tools.allowed` as narrow as your work needs, and keep the denylist. Use per-category `tools` to give each category only what it needs.
+- Run `localpilot check` in a repository you cloned to see whether its `.localpilot/config.yaml` changed the policy.
 - Leave `architecture`, `security_review` and `code_generation` disabled.
 - Do not point LocalPilot at a workspace root that contains unrelated secrets, such as your home directory.

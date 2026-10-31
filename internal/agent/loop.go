@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/pcittadini/localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/policy"
 	"github.com/pcittadini/localpilot/internal/taskctx"
 	"github.com/pcittadini/localpilot/internal/tools"
 )
@@ -38,6 +39,7 @@ const (
 // session is the fixed setup of one task's conversation.
 type session struct {
 	spec      models.Spec
+	budgets   policy.Budgets
 	task      Task
 	system    string
 	defs      []models.ToolDefinition
@@ -58,7 +60,7 @@ type session struct {
 //
 // It returns false after recording a failure in res.
 func (r *Runtime) converse(ctx, parent context.Context, res *Result, s *session, user string) (string, bool) {
-	b := r.cfg.Delegation.Budgets
+	b := s.budgets
 	maxIter := b.MaxIterations
 	if len(s.defs) == 0 {
 		maxIter = 1
@@ -194,7 +196,7 @@ func (r *Runtime) runTool(ctx context.Context, res *Result, s *session, tc model
 			"status", use.Status, "duration_ms", use.DurationMS)
 	}()
 
-	if res.Metrics.ToolCalls >= r.cfg.Delegation.Budgets.MaxToolCalls {
+	if res.Metrics.ToolCalls >= s.budgets.MaxToolCalls {
 		use.Status = "skipped"
 		return "Not executed: the tool-call budget is exhausted.", false
 	}
@@ -303,7 +305,8 @@ func toolPromptSection(permitted []string, maxCalls int) string {
 		return ""
 	}
 	return fmt.Sprintf(`Tools: you can inspect the workspace with read-only tools (%s). You have at most %d tool calls in total.
-- Use a tool only when <context> does not already contain what you need.
+- If <context> already contains what the objective needs, answer right away without calling any tool.
+- Otherwise use tools to find only what is missing.
 - Prefer search_code and line ranges over reading whole files.
 - When you have enough information, stop calling tools and give your final answer.
 

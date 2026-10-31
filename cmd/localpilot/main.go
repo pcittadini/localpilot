@@ -23,6 +23,7 @@ import (
 	"github.com/pcittadini/localpilot/internal/config"
 	"github.com/pcittadini/localpilot/internal/mcp"
 	"github.com/pcittadini/localpilot/internal/models"
+	"github.com/pcittadini/localpilot/internal/policy"
 	"github.com/pcittadini/localpilot/internal/tools"
 	"github.com/pcittadini/localpilot/internal/workspace"
 )
@@ -80,6 +81,7 @@ type app struct {
 	ollama   *models.Ollama
 	registry *models.Registry
 	tools    *tools.Registry
+	policy   *policy.Engine
 	runtime  *agent.Runtime
 	closeLog func()
 }
@@ -117,17 +119,30 @@ func newApp(flags commonFlags, jsonLogs bool) (*app, error) {
 		closeLog()
 		return nil, err
 	}
-	ollama, err := models.NewOllama(cfg.Providers.Ollama.BaseURL, nil)
-	if err != nil {
+	fail := func(err error) (*app, error) {
 		closeLog()
 		return nil, err
 	}
-	reg, err := models.NewRegistry(cfg, map[string]models.Provider{"ollama": ollama})
-	if err != nil {
-		closeLog()
-		return nil, err
+
+	// The project configuration can only narrow the global one. A project
+	// file that cannot be read disables delegation (the engine fails closed)
+	// rather than being skipped.
+	project, projectErr := policy.LoadProject(ws)
+	eff, warnings := policy.Apply(cfg, project)
+	projectPath := ""
+	if project != nil || projectErr != nil {
+		projectPath = policy.ProjectConfigPath
 	}
-	tp := cfg.Delegation.Tools
+
+	ollama, err := models.NewOllama(eff.Providers.Ollama.BaseURL, nil)
+	if err != nil {
+		return fail(err)
+	}
+	reg, err := models.NewRegistry(eff, map[string]models.Provider{"ollama": ollama})
+	if err != nil {
+		return fail(err)
+	}
+	tp := eff.Delegation.Tools
 	toolReg, err := tools.New(context.Background(), ws, tools.Options{
 		Allowed:        tp.Allowed,
 		Denied:         tp.Denied,
@@ -135,17 +150,28 @@ func newApp(flags commonFlags, jsonLogs bool) (*app, error) {
 		MaxResultBytes: tp.MaxResultBytes,
 	})
 	if err != nil {
-		closeLog()
-		return nil, fmt.Errorf("delegation.tools: %w", err)
+		return fail(fmt.Errorf("delegation.tools: %w", err))
+	}
+	engine, err := policy.New(eff, policy.Options{
+		Supported:   agent.SupportedCategoryNames(),
+		Known:       tools.Known,
+		Enabled:     toolReg.Enabled(),
+		ProjectPath: projectPath,
+		ProjectErr:  projectErr,
+		Warnings:    warnings,
+	})
+	if err != nil {
+		return fail(err)
 	}
 	return &app{
-		cfg:      cfg,
+		cfg:      eff,
 		log:      log,
 		ws:       ws,
 		ollama:   ollama,
 		registry: reg,
 		tools:    toolReg,
-		runtime:  agent.NewRuntime(cfg, reg, ws, toolReg, log),
+		policy:   engine,
+		runtime:  agent.NewRuntime(eff, reg, ws, toolReg, engine, log),
 		closeLog: closeLog,
 	}, nil
 }
@@ -200,6 +226,14 @@ func runServe(args []string) error {
 	if a.ollama.Insecure() {
 		a.log.Warn(insecureWarning, "ollama", a.cfg.Providers.Ollama.BaseURL)
 	}
+	a.log.Info("policy loaded", "version", a.policy.Version(), "project_config", a.policy.ProjectPath(),
+		"categories", a.policy.EnabledCategories())
+	for _, w := range a.policy.Warnings() {
+		a.log.Warn("policy", "warning", w)
+	}
+	if err := a.policy.FailClosed(); err != nil {
+		a.log.Error("delegation disabled", "error", err)
+	}
 
 	// Verify the model in the background: a missing Ollama must not stop
 	// Claude Code from discovering the server; tasks escalate instead.
@@ -216,7 +250,7 @@ func runServe(args []string) error {
 		}
 	}()
 
-	server, err := mcp.NewServer(a.runtime, a.cfg, version, a.log)
+	server, err := mcp.NewServer(a.runtime, a.policy, version, a.log)
 	if err != nil {
 		return err
 	}
@@ -295,6 +329,8 @@ func runCheck(args []string) error {
 		fmt.Printf("  warning: %s\n", insecureWarning)
 	}
 
+	printPolicy(a.policy)
+
 	failed := false
 	for _, r := range checkModels(ctx, a) {
 		marker := ""
@@ -342,6 +378,40 @@ func runCheck(args []string) error {
 	fmt.Printf("\nstructured output test: OK (%s, %d+%d tokens)\n",
 		time.Since(start).Round(time.Millisecond), resp.Usage.InputTokens, resp.Usage.OutputTokens)
 	return nil
+}
+
+// printPolicy shows the effective per-category policy.
+func printPolicy(e *policy.Engine) {
+	project := e.ProjectPath()
+	if project == "" {
+		project = "none"
+	}
+	fmt.Printf("\npolicy %s (project config: %s)\n", e.Version(), project)
+	if err := e.FailClosed(); err != nil {
+		fmt.Printf("  ERROR: %v\n", err)
+	}
+	for _, r := range e.Rules() {
+		state := "enabled"
+		switch {
+		case !r.Supported:
+			state = "unsupported"
+		case !r.Enabled:
+			state = "disabled"
+		}
+		fmt.Printf("  %-16s %-11s", r.Category, state)
+		if r.Enabled {
+			tools := "none"
+			if len(r.Tools) > 0 {
+				tools = strings.Join(r.Tools, ",")
+			}
+			fmt.Printf(" model=%s tools=%s calls=%d iter=%d input=%d timeout=%ds",
+				r.Model, tools, r.MaxToolCalls, r.MaxIterations, r.MaxInputTokens, r.TimeoutSeconds)
+		}
+		fmt.Println()
+	}
+	for _, w := range e.Warnings() {
+		fmt.Printf("  warning: %s\n", w)
+	}
 }
 
 func runDelegate(args []string) error {

@@ -96,3 +96,26 @@ The Ollama client is hand-written on `net/http`.
 **D29. Warn about unencrypted remote inference.** Workspace code is sent to Ollama, whose API has no authentication or TLS. `serve` and `check` warn when the server is reached over plain HTTP on a non-loopback host, without blocking it: a trusted LAN is a legitimate setup.
 
 **D30. No personal infrastructure in the repository.** Examples use `localhost` or a placeholder host. Development hostnames, IPs and custom model tags stay out of code, tests and history.
+
+## Phase 3
+
+**D31. One decision per task, made before any model runs.** `policy.Engine.Evaluate` is a pure function of the compiled policy and the request. It returns allowed or not, the model, the permitted tools and the budgets: input (already clamped to the model's context window), output (capped by the model's `max_tokens`), tool calls, iterations and timeout. The runtime enforces that decision and reads no limit from anywhere else. The effective policy is hashed into a 12-character version, returned with every result and logged, so metrics (Phase 4) can tie outcomes to the policy that produced them.
+
+**D32. Per-category rules in the global configuration.** A category may name a model, a tool subset (`[]` means none) and budget overrides. The global file is trusted, so its category budgets may exceed the delegation-wide defaults. Unknown tools or models in a category are startup errors.
+
+**D33. Project configuration only narrows.** `.localpilot/config.yaml` has its own strict schema covering categories, budgets and tools, nothing more. Providers, models, logging and the workspace are rejected outright. Otherwise a cloned repository could send its code to a server of its choosing or write logs anywhere.
+
+Within the schema:
+- Every setting is merged as a narrowing: disable, intersect, deny, lower.
+- Each widening attempt is ignored and reported as a warning in logs and `localpilot check`.
+- Project budgets cap global category budgets too.
+- A project may choose among globally configured models, which the user has already vetted.
+- A property-style test asserts the effective policy is never wider than the global one, and a mutation check confirmed the test catches a widening bug.
+
+**D34. A broken project file fails closed.** If `.localpilot/config.yaml` exists but cannot be read or parsed, every task is rejected with an explanation. The alternatives are worse: skipping the file would silently drop the restrictions it intended, and refusing to start would leave Claude Code without an explanation. The file is read through the workspace sandbox, so a symlink out of the workspace counts as unreadable.
+
+**D35. Requests can narrow tools.** `delegate_task` accepts an optional `tools` subset. `[]` runs a single tool-free call, which is the fastest path when the context already holds everything. Unknown tool names are rejected by the input schema and again by the engine; known tools outside the category's policy are rejected by the engine.
+
+**D36. MCP schema follows the policy.** The `category` enum lists only categories the effective policy enables, so Claude never sees disabled ones. When none is enabled, the enum is omitted rather than empty, so requests still reach the engine and get an explanation.
+
+**D37. Excerpts are declared complete.** Live testing showed that with tools available, the model treated a log excerpt labelled `api.log` as a workspace file. It searched for it, explored the repository, and finally declared its correct answer incomplete. The prompt now states that excerpts are complete material from the requester and not files, and that the model should answer without tools when the context suffices. Log analysis went from 12–19 s and up to 4 tool calls to about 1.7 s and no tool calls, 5 out of 5 runs.

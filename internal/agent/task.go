@@ -46,6 +46,16 @@ func SupportedCategories() []Category {
 	return []Category{CategoryExtraction, CategorySummarization, CategoryLogAnalysis, CategoryCodeAnalysis, CategoryDocumentation}
 }
 
+// SupportedCategoryNames lists SupportedCategories as strings, for the
+// policy engine.
+func SupportedCategoryNames() []string {
+	var out []string
+	for _, c := range SupportedCategories() {
+		out = append(out, string(c))
+	}
+	return out
+}
+
 type OutputFormat string
 
 const (
@@ -62,6 +72,9 @@ type Task struct {
 	Context      taskctx.Request
 	Constraints  []string
 	OutputFormat OutputFormat
+	// RestrictTools narrows the policy's tools to Tools (empty: no tools).
+	RestrictTools bool
+	Tools         []string
 }
 
 // Tracker keeps the latest state of recent tasks for status queries. It is

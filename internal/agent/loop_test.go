@@ -436,3 +436,97 @@ func TestLoopGivesUpOnToolsAfterSecondMalformedCall(t *testing.T) {
 	}}
 	wantEscalation(t, loopRuntime(t, p, nil).Execute(context.Background(), exploreTask()), StatusEscalated, ReasonOutputInvalid)
 }
+
+func TestPolicyDecisionDrivesExecution(t *testing.T) {
+	// The category may only read files, with one tool call.
+	p := script(t,
+		callsMsg(call("read_file", `{"path":"internal/auth/handler.go"}`), call("list_files", `{}`)),
+		answerMsg(goodAnswer),
+	)
+	rt := loopRuntime(t, p, func(c *config.Config) {
+		for i := range c.Delegation.Policies {
+			if c.Delegation.Policies[i].Category == "code_analysis" {
+				c.Delegation.Policies[i].Tools = &[]string{"read_file"}
+				c.Delegation.Policies[i].Budgets = config.Budgets{MaxToolCalls: 1, TimeoutSeconds: 7}
+			}
+		}
+	})
+	res := rt.Execute(context.Background(), exploreTask())
+	if res.Status != StatusCompleted {
+		t.Fatalf("status=%s escalation=%+v", res.Status, res.Escalation)
+	}
+	if len(p.reqs[0].Tools) != 1 || p.reqs[0].Tools[0].Name != "read_file" {
+		t.Errorf("offered tools = %+v", p.reqs[0].Tools)
+	}
+	if res.Trace[1].Status != "skipped" || res.Metrics.ToolCalls != 1 {
+		t.Errorf("the category's tool budget must apply: %+v", res.Trace)
+	}
+	pi := res.Policy
+	if pi == nil || pi.Version == "" || len(pi.Tools) != 1 || pi.MaxToolCalls != 1 || pi.TimeoutSeconds != 7 || pi.MaxIterations != 5 {
+		t.Errorf("policy info = %+v", pi)
+	}
+}
+
+func TestRequestCanOnlyNarrowTools(t *testing.T) {
+	// tools: [] runs a single tool-free call, even though policy allows tools.
+	p := script(t, answerMsg(goodAnswer))
+	task := codeTask()
+	task.RestrictTools, task.Tools = true, []string{}
+	res := loopRuntime(t, p, nil).Execute(context.Background(), task)
+	if res.Status != StatusCompleted || len(p.reqs[0].Tools) != 0 || p.reqs[0].ResponseSchema == nil || len(res.Policy.Tools) != 0 {
+		t.Fatalf("status=%s tools=%d policy=%+v", res.Status, len(p.reqs[0].Tools), res.Policy)
+	}
+
+	// Unknown or unpermitted tools are rejected before any model call.
+	for _, tools := range [][]string{{"shell"}, {"write_file"}} {
+		p := script(t)
+		task := codeTask()
+		task.RestrictTools, task.Tools = true, tools
+		res := loopRuntime(t, p, nil).Execute(context.Background(), task)
+		wantEscalation(t, res, StatusRejected, ReasonInvalidRequest)
+		if p.calls != 0 || res.Policy == nil || res.Policy.Version == "" {
+			t.Errorf("%v: calls=%d policy=%+v", tools, p.calls, res.Policy)
+		}
+	}
+	p = script(t)
+	task = codeTask()
+	task.RestrictTools, task.Tools = true, []string{"git_log"} // git is unavailable in this workspace
+	wantEscalation(t, loopRuntime(t, p, nil).Execute(context.Background(), task), StatusRejected, ReasonPolicy)
+}
+
+func TestPolicySelectsModelPerCategory(t *testing.T) {
+	p := script(t, answerMsg(`{"summary":"x","findings":[],"complete":true,"limitations":""}`))
+	rt := loopRuntime(t, p, func(c *config.Config) {
+		c.Models.Available = append(c.Models.Available, config.ModelConfig{
+			Name: "summarizer", Provider: "ollama", Model: "qwen3.5:4b", Temperature: 0.3, MaxTokens: 512, ContextWindow: 4096,
+		})
+		for i := range c.Delegation.Policies {
+			if c.Delegation.Policies[i].Category == "summarization" {
+				c.Delegation.Policies[i].Model = "summarizer"
+			}
+		}
+	})
+	task := codeTask()
+	task.Category = CategorySummarization
+	res := rt.Execute(context.Background(), task)
+	req := p.reqs[0]
+	if res.Model != "summarizer" || req.Model != "qwen3.5:4b" || req.MaxTokens != 512 || req.ContextWindow != 4096 || req.Temperature != 0.3 {
+		t.Errorf("model=%s request=%+v", res.Model, req)
+	}
+}
+
+func TestPromptExplainsExcerpts(t *testing.T) {
+	p := script(t, answerMsg(`{"summary":"x","findings":[],"complete":true,"limitations":""}`))
+	task := Task{Category: CategoryLogAnalysis, Objective: "Count errors",
+		Context: taskctx.Request{Excerpts: []taskctx.Excerpt{{Label: "api.log", Content: "ERROR a\n"}}}}
+	loopRuntime(t, p, nil).Execute(context.Background(), task)
+	sys := p.reqs[0].System
+	if !strings.Contains(sys, "not files in the workspace") || !strings.Contains(sys, "answer right away without calling any tool") {
+		t.Errorf("system prompt:\n%s", sys)
+	}
+	p = script(t, answerMsg(`{"summary":"x","findings":[],"complete":true,"limitations":""}`))
+	loopRuntime(t, p, nil).Execute(context.Background(), codeTask())
+	if strings.Contains(p.reqs[0].System, "Excerpts in <context>") {
+		t.Error("the excerpt note must only appear when excerpts are present")
+	}
+}

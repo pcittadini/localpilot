@@ -37,6 +37,12 @@ delegation:
     max_iterations: 5          # model calls per task; the last one must answer
     timeout_seconds: 60        # whole task, all model and tool calls
 
+  # Per-category policy. Besides enabled, a category may set:
+  #   model: <name from models.available>   (default: models.default)
+  #   tools: [read_file, ...]               (subset of the tools below; [] = none)
+  #   budgets: {max_tool_calls: 4, ...}     (overrides the budgets above)
+  # A project can narrow all of this in .localpilot/config.yaml; see
+  # configs/project.example.yaml.
   policies:
     - category: extraction
       enabled: true

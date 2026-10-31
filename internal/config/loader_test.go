@@ -66,14 +66,16 @@ func TestParseRejectsUnknownKeys(t *testing.T) {
 
 func TestValidateErrors(t *testing.T) {
 	tests := map[string]string{
-		"unknown default model": "models:\n  default: nope\n",
-		"bad url":               "providers:\n  ollama:\n    base_url: localhost:11434\n",
-		"unsupported provider":  "models:\n  default: m\n  available:\n    - {name: m, provider: openai, model: x}\n",
-		"missing model id":      "models:\n  default: m\n  available:\n    - {name: m, provider: ollama}\n",
-		"negative budget":       "delegation:\n  budgets:\n    max_tool_calls: -1\n",
-		"bad version":           "version: 2\n",
-		"bad log level":         "logging:\n  level: loud\n",
-		"duplicate category":    "delegation:\n  policies:\n    - {category: extraction, enabled: true}\n    - {category: extraction, enabled: false}\n",
+		"unknown default model":    "models:\n  default: nope\n",
+		"bad url":                  "providers:\n  ollama:\n    base_url: localhost:11434\n",
+		"unsupported provider":     "models:\n  default: m\n  available:\n    - {name: m, provider: openai, model: x}\n",
+		"missing model id":         "models:\n  default: m\n  available:\n    - {name: m, provider: ollama}\n",
+		"negative budget":          "delegation:\n  budgets:\n    max_tool_calls: -1\n",
+		"bad version":              "version: 2\n",
+		"bad log level":            "logging:\n  level: loud\n",
+		"duplicate category":       "delegation:\n  policies:\n    - {category: extraction, enabled: true}\n    - {category: extraction, enabled: false}\n",
+		"unknown category model":   "delegation:\n  policies:\n    - {category: extraction, enabled: true, model: nope}\n",
+		"negative category budget": "delegation:\n  policies:\n    - {category: extraction, enabled: true, budgets: {max_tool_calls: -1}}\n",
 	}
 	for name, yml := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -167,5 +169,40 @@ func TestShippedDefaultConfigMatchesDefaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg, Default()) {
 		t.Errorf("configs/default.yaml differs from Default():\n got %+v\nwant %+v", cfg, Default())
+	}
+}
+
+func TestCategoryOverridesAndClone(t *testing.T) {
+	cfg, err := Parse([]byte(`
+delegation:
+  policies:
+    - category: summarization
+      enabled: true
+      tools: []
+    - category: code_analysis
+      enabled: true
+      model: qwen-local
+      tools: [read_file, search_code]
+      budgets: {max_tool_calls: 4, timeout_seconds: 30}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum, code := cfg.Delegation.Policies[0], cfg.Delegation.Policies[1]
+	if sum.Tools == nil || len(*sum.Tools) != 0 {
+		t.Errorf("tools: [] must mean no tools, got %v", sum.Tools)
+	}
+	if code.Model != "qwen-local" || len(*code.Tools) != 2 || code.Budgets.MaxToolCalls != 4 || code.Budgets.TimeoutSeconds != 30 {
+		t.Errorf("code_analysis = %+v", code)
+	}
+
+	clone := cfg.Clone()
+	(*clone.Delegation.Policies[1].Tools)[0] = "changed"
+	clone.Delegation.Policies[0].Enabled = false
+	clone.Delegation.Tools.Allowed[0] = "changed"
+	*clone.Models.Available[0].Think = true
+	if (*code.Tools)[0] != "read_file" || !cfg.Delegation.Policies[0].Enabled ||
+		cfg.Delegation.Tools.Allowed[0] != "read_file" || *cfg.Models.Available[0].Think {
+		t.Error("Clone shares state with the original")
 	}
 }
