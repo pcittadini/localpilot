@@ -119,3 +119,39 @@ Within the schema:
 **D36. MCP schema follows the policy.** The `category` enum lists only categories the effective policy enables, so Claude never sees disabled ones. When none is enabled, the enum is omitted rather than empty, so requests still reach the engine and get an explanation.
 
 **D37. Excerpts are declared complete.** Live testing showed that with tools available, the model treated a log excerpt labelled `api.log` as a workspace file. It searched for it, explored the repository, and finally declared its correct answer incomplete. The prompt now states that excerpts are complete material from the requester and not files, and that the model should answer without tools when the context suffices. Log analysis went from 12–19 s and up to 4 tool calls to about 1.7 s and no tool calls, 5 out of 5 runs.
+
+## Phase 4
+
+**D38. SQLite through the pure-Go `modernc.org/sqlite` driver.** It keeps LocalPilot a single binary that builds without a C compiler on every platform CI covers. It is the largest dependency so far, so it is pinned to a release that had been out for a month (v1.60.1), not the newest. govulncheck and Dependabot cover it like every other module.
+
+**D39. Migrations and concurrency.**
+- The schema version lives in `PRAGMA user_version`. Migrations are append-only SQL, each applied in its own `BEGIN IMMEDIATE` transaction that re-reads the version first. Concurrent LocalPilot processes (one per Claude Code session) therefore take turns, and a database from a newer LocalPilot is refused rather than modified.
+- The database runs in WAL mode, so readers (reports, the hook) never block the server.
+- Each process uses one connection with a 5 s busy timeout. Switching to WAL can return `SQLITE_BUSY` without waiting on the busy timeout; a concurrent-open test caught this, and the switch is now retried for a bounded time.
+
+**D40. Store as little as possible.** The schema follows the architecture plan (§12.5), with two additions: `model_calls` (one row per local model call) and the provider's model tag. Nothing derived from task content is stored; see the security model for what that excludes and how names from the model are reduced. Times are fixed-width UTC text, so they sort and compare as strings. Only the global configuration can set the database path, and records are kept for 180 days by default.
+
+**D41. How Claude tokens are estimated.** The plan asks for avoided tokens and orchestration overhead without pretending the baseline is known.
+- Bytes are converted at 4 per token. That deliberately undercounts code a little, so avoided work is not overstated.
+- *Avoided input* is the workspace context LocalPilot resolved plus the tool output the local model read: material Claude would otherwise have read itself. Excerpts are excluded, because Claude already had them.
+- *Avoided output* is the size of the local model's answer, standing in for the analysis Claude would have written.
+- *Overhead* is the `delegate_task` request Claude wrote (excerpts included) plus the result and summary line it read.
+- Only completed tasks avoid work. Escalated, failed and rejected tasks count overhead only, because Claude still does the task.
+- Per-task estimates are stored with the price at recording time. Reports re-price stored token counts with the current configuration, so a price update applies to history.
+- Prompt caching and re-reading of material in later turns are not modelled. Shadow mode (Phase 5) is meant to calibrate all of this against real Claude runs.
+
+**D42. Overhead is real, and the tooling says so.** The live end-to-end run delegated a 228-byte README. It avoided about 110 Claude tokens and cost about 250 in request and result, a net cost. The estimate reports that rather than hiding it: the hook prints "net cost", and the report shows negative net values. The `delegate_task` description and the skill now tell Claude that delegation pays off only when the local model reads more than a few hundred tokens of material.
+
+**D43. Billing modes.** `savings.billing` is `subscription` (default) or `api`, because LocalPilot cannot detect the user's plan (plan detection is out of scope for the MVP). In subscription mode the report gives only the API-equivalent value of usage avoided and states that it is not money saved. Only api mode reports estimated savings. Default prices are Anthropic's first-party list prices for current models, October 2026, and are configurable.
+
+**D44. Visibility in Claude Code through hooks.** Claude Code's documentation guarantees two things: hook matchers can target MCP tools by name, and a hook's `systemMessage` is shown to the user without entering Claude's context. It does not document showing MCP progress or log notifications. So `localpilot hook` is the main way to show activity: a message when a delegation starts, and one with the outcome, model and tool calls, local tokens and the recorded Claude estimate.
+- The `tool_response` shape for MCP tools is undocumented, so the hook searches it for a LocalPilot result instead of decoding a fixed schema. It is tested against six plausible shapes.
+- The savings estimate comes from the metrics database by task ID.
+- The hook never blocks or alters a call, and on any problem it prints nothing.
+
+**D45. Summary line and progress notifications.**
+- The `delegate_task` text content starts with a one-line summary, followed by the JSON result. `structuredContent` is unchanged.
+- When the client sends a progress token, every model call (start and finish) and tool call is sent as an MCP progress notification. Progress is best effort: each notification has a one-second deadline and its errors are ignored.
+- Both cost Claude almost nothing and help any client that shows them. Neither is relied on for visibility.
+
+**D46. Recording never fails a task.** The recorder runs when the task ends, on its own context, so a task whose client disconnected is still recorded. Errors are logged.

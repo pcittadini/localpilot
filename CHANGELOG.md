@@ -20,6 +20,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - `tools` argument on `delegate_task` to narrow tools per request (`[]` for a single tool-free call).
 - `localpilot check` prints the effective policy and warnings.
 - Claude Code skill (`skills/local-delegate`), configuration reference, security model, and contribution guidelines.
+- Metrics database (SQLite, pure Go): every task recorded with local usage per model call, tool calls, status, policy version and Claude token estimates; private file permissions, 180-day retention, no task content.
+- Savings estimates with configurable Claude pricing and billing mode (`subscription` by default, `api`); `get_savings_report` MCP tool and `localpilot report` CLI.
+- `localpilot hook`: Claude Code hook that shows a message when a delegation starts and another with its outcome, local usage and estimated Claude tokens.
+- One-line summary at the top of each `delegate_task` result, and MCP progress notifications for each model and tool call.
 
 ### Fixed
 

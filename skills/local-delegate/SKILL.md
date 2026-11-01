@@ -15,6 +15,8 @@ Use LocalPilot (`mcp__localpilot__delegate_task`) to run tasks that match the co
 - Code pattern discovery and simple code analysis (`code_analysis`)
 - Documentation analysis (`documentation`)
 
+Delegation costs a few hundred tokens of your own usage (writing the request, reading the result). It pays off when the local model reads more than that: several files, a large file, a package, or long logs. For one small file, read it yourself.
+
 ## Never delegate
 
 - Architecture decisions
@@ -41,3 +43,4 @@ Use LocalPilot (`mcp__localpilot__delegate_task`) to run tasks that match the co
 - Never assume execution succeeded without checking the result.
 - On `escalated` or `rejected`, handle the task yourself; `escalation.reason` says why.
 - Claude remains responsible for all final decisions.
+- `get_savings_report` reports usage and estimated savings. When you present it, say the Claude figures are estimates, and on a subscription that the value is usage capacity preserved, not money saved.

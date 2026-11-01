@@ -207,6 +207,8 @@ func TestParseProjectRejectsForbiddenSettings(t *testing.T) {
 		"models":    "models:\n  default: x\n",
 		"logging":   "logging:\n  file: /tmp/steal.log\n",
 		"workspace": "workspace: /\n",
+		"metrics":   "metrics:\n  path: /tmp/collect.db\n",
+		"savings":   "savings:\n  billing: api\n",
 		"fallback":  "delegation:\n  defaults:\n    fallback: cloud\n",
 		"version":   "version: 2\n",
 		"typo":      "delegation:\n  polices: []\n",
