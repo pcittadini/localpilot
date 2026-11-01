@@ -22,8 +22,10 @@ import (
 	"github.com/pcittadini/localpilot/internal/agent"
 	"github.com/pcittadini/localpilot/internal/config"
 	"github.com/pcittadini/localpilot/internal/mcp"
+	"github.com/pcittadini/localpilot/internal/metrics"
 	"github.com/pcittadini/localpilot/internal/models"
 	"github.com/pcittadini/localpilot/internal/policy"
+	"github.com/pcittadini/localpilot/internal/storage"
 	"github.com/pcittadini/localpilot/internal/tools"
 	"github.com/pcittadini/localpilot/internal/workspace"
 )
@@ -38,10 +40,13 @@ Usage:
   localpilot check    [--config FILE] [--workspace DIR]   verify Ollama and model capabilities
   localpilot delegate [--config FILE] [--workspace DIR] [--task FILE]
                                                          run one task (JSON on stdin or --task) and print the result
+  localpilot report   [--config FILE] [--workspace DIR] [--period P] [--scope S] [--json]
+                                                         print usage and estimated savings (P: day, week, month, all)
+  localpilot hook     [--config FILE]                    Claude Code hook: show LocalPilot activity in the chat
   localpilot version
 
 Environment overrides: LOCALPILOT_CONFIG, LOCALPILOT_WORKSPACE, LOCALPILOT_OLLAMA_URL,
-LOCALPILOT_MODEL, LOCALPILOT_LOG_LEVEL, LOCALPILOT_LOG_FILE.
+LOCALPILOT_MODEL, LOCALPILOT_LOG_LEVEL, LOCALPILOT_LOG_FILE, LOCALPILOT_METRICS_PATH.
 `
 
 func main() {
@@ -57,6 +62,10 @@ func main() {
 		err = runCheck(args)
 	case "delegate":
 		err = runDelegate(args)
+	case "report":
+		err = runReport(args)
+	case "hook":
+		runHook(args)
 	case "version", "--version":
 		fmt.Println(version)
 	case "help", "-h", "--help":
@@ -83,7 +92,17 @@ type app struct {
 	tools    *tools.Registry
 	policy   *policy.Engine
 	runtime  *agent.Runtime
+	// store and reporter are nil when metrics are disabled or unavailable.
+	store    *storage.Store
+	reporter *metrics.Reporter
 	closeLog func()
+}
+
+func (a *app) close() {
+	if a.store != nil {
+		a.store.Close()
+	}
+	a.closeLog()
 }
 
 type commonFlags struct {
@@ -163,7 +182,7 @@ func newApp(flags commonFlags, jsonLogs bool) (*app, error) {
 	if err != nil {
 		return fail(err)
 	}
-	return &app{
+	a := &app{
 		cfg:      eff,
 		log:      log,
 		ws:       ws,
@@ -173,7 +192,46 @@ func newApp(flags commonFlags, jsonLogs bool) (*app, error) {
 		policy:   engine,
 		runtime:  agent.NewRuntime(eff, reg, ws, toolReg, engine, log),
 		closeLog: closeLog,
-	}, nil
+	}
+	a.openMetrics()
+	return a, nil
+}
+
+// openMetrics connects the metrics database. Metrics are not a security
+// control, so a database that cannot be opened is logged and skipped:
+// delegation keeps working, unrecorded.
+func (a *app) openMetrics() {
+	m := a.cfg.Metrics
+	if !m.Enabled {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := storage.Open(ctx, m.Path)
+	if err != nil {
+		a.log.Warn("metrics disabled: database unavailable", "path", m.Path, "error", err)
+		return
+	}
+	if m.RetentionDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -m.RetentionDays)
+		if n, err := store.Purge(ctx, cutoff); err != nil {
+			a.log.Warn("metrics: retention purge failed", "error", err)
+		} else if n > 0 {
+			a.log.Info("metrics: purged old tasks", "tasks", n, "retention_days", m.RetentionDays)
+		}
+	}
+	a.store = store
+	a.reporter = metrics.NewReporter(store, a.cfg.Savings, a.ws.Path())
+	a.runtime.SetRecorder(metrics.NewRecorder(store, a.ws.Path(), a.cfg.Savings, a.log))
+}
+
+// reports returns the report source for the MCP server, or a nil interface
+// when metrics are off (never a typed nil).
+func (a *app) reports() mcp.Reports {
+	if a.reporter == nil {
+		return nil
+	}
+	return a.reporter
 }
 
 // newLogger writes to the configured file or stderr. Never stdout: it carries
@@ -210,7 +268,7 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer a.closeLog()
+	defer a.close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -234,6 +292,10 @@ func runServe(args []string) error {
 	if err := a.policy.FailClosed(); err != nil {
 		a.log.Error("delegation disabled", "error", err)
 	}
+	if a.store != nil {
+		a.log.Info("metrics enabled", "path", a.store.Path(), "billing", a.cfg.Savings.Billing,
+			"reference_model", a.cfg.Savings.ReferenceModel)
+	}
 
 	// Verify the model in the background: a missing Ollama must not stop
 	// Claude Code from discovering the server; tasks escalate instead.
@@ -250,7 +312,7 @@ func runServe(args []string) error {
 		}
 	}()
 
-	server, err := mcp.NewServer(a.runtime, a.policy, version, a.log)
+	server, err := mcp.NewServer(a.runtime, a.policy, a.reports(), version, a.log)
 	if err != nil {
 		return err
 	}
@@ -304,7 +366,7 @@ func runCheck(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer a.closeLog()
+	defer a.close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -315,6 +377,14 @@ func runCheck(args []string) error {
 	}
 	fmt.Printf("LocalPilot %s\nconfig:    %s\nworkspace: %s\n", version, source, a.ws.Path())
 	fmt.Printf("tools:     %s\n", strings.Join(a.tools.Enabled(), ", "))
+	switch {
+	case !a.cfg.Metrics.Enabled:
+		fmt.Printf("metrics:   disabled\n")
+	case a.store == nil:
+		fmt.Printf("metrics:   %s  UNAVAILABLE (see log)\n", a.cfg.Metrics.Path)
+	default:
+		fmt.Printf("metrics:   %s (billing %s, priced as %s)\n", a.store.Path(), a.cfg.Savings.Billing, a.cfg.Savings.ReferenceModel)
+	}
 	for name, why := range a.tools.Unavailable() {
 		fmt.Printf("           %s unavailable: %s\n", name, why)
 	}
@@ -427,7 +497,7 @@ func runDelegate(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer a.closeLog()
+	defer a.close()
 
 	var data []byte
 	if taskFile != "" {

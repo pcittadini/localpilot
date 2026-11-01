@@ -24,13 +24,14 @@ import (
 // decision permits), and validates the result. Every limit it enforces comes
 // from the decision.
 type Runtime struct {
-	cfg     *config.Config
-	models  *models.Registry
-	ws      *workspace.Root
-	tools   *tools.Registry
-	policy  *policy.Engine
-	tracker *Tracker
-	log     *slog.Logger
+	cfg      *config.Config
+	models   *models.Registry
+	ws       *workspace.Root
+	tools    *tools.Registry
+	policy   *policy.Engine
+	tracker  *Tracker
+	recorder Recorder
+	log      *slog.Logger
 }
 
 // NewRuntime wires a runtime. toolReg may be nil, in which case tasks run as
@@ -39,18 +40,38 @@ func NewRuntime(cfg *config.Config, reg *models.Registry, ws *workspace.Root, to
 	return &Runtime{cfg: cfg, models: reg, ws: ws, tools: toolReg, policy: engine, tracker: NewTracker(1000), log: log}
 }
 
+// SetRecorder makes the runtime hand every finished task to rec. Call it
+// before the runtime executes tasks.
+func (r *Runtime) SetRecorder(rec Recorder) { r.recorder = rec }
+
 // Status returns the last known state of a task.
 func (r *Runtime) Status(id string) (Result, bool) { return r.tracker.Get(id) }
 
 // Execute runs a task to completion and always returns a Result describing
 // the outcome; failures are reported in the Result, not as errors.
-func (r *Runtime) Execute(ctx context.Context, t Task) (res Result) {
+func (r *Runtime) Execute(ctx context.Context, t Task) Result { return r.Run(ctx, t, nil) }
+
+// Run is Execute with an optional observer that sees each model call and
+// tool call as it happens.
+func (r *Runtime) Run(ctx context.Context, t Task, observe Observer) (res Result) {
 	start := time.Now()
 	res = Result{TaskID: newID(), Status: StatusQueued, Category: string(t.Category)}
 	r.tracker.Put(res)
+	var s *session
 	defer func() {
-		res.Metrics.DurationMS = time.Since(start).Milliseconds()
+		end := time.Now()
+		res.Metrics.DurationMS = end.Sub(start).Milliseconds()
 		r.tracker.Put(res)
+		if r.recorder != nil {
+			rec := Record{Task: t, Result: res, StartedAt: start, FinishedAt: end}
+			if s != nil {
+				rec.ProviderModel = s.spec.Model
+				rec.WorkspaceBytes = s.workspaceBytes
+				rec.ToolResultBytes = s.toolBytes
+				rec.ModelCalls = s.calls
+			}
+			r.recorder.Record(rec)
+		}
 		attrs := []any{
 			"task_id", res.TaskID, "category", res.Category, "status", res.Status,
 			"model", res.Model, "duration_ms", res.Metrics.DurationMS, "iterations", res.Metrics.Iterations,
@@ -88,7 +109,7 @@ func (r *Runtime) Execute(ctx context.Context, t Task) (res Result) {
 	}
 	res.Model = spec.Name
 
-	s := &session{spec: spec, task: t, budgets: d.Budgets, maxOut: d.Budgets.MaxOutputTokens, budget: d.Budgets.MaxInputTokens}
+	s = &session{spec: spec, task: t, budgets: d.Budgets, maxOut: d.Budgets.MaxOutputTokens, budget: d.Budgets.MaxInputTokens, observe: observe}
 	if r.tools != nil && d.Budgets.MaxIterations > 1 && len(d.Tools) > 0 {
 		s.permitted = d.Tools
 		s.defs = r.tools.Definitions(s.permitted)
@@ -113,6 +134,11 @@ func (r *Runtime) Execute(ctx context.Context, t Task) (res Result) {
 	res.Metrics.ContextTokens = pkg.EstimatedTokens
 	res.Metrics.Redactions = pkg.Redactions
 	s.cov = newCoverage(pkg)
+	for _, it := range pkg.Items {
+		if it.Path != "" {
+			s.workspaceBytes += len(it.Text)
+		}
+	}
 
 	res.Status = StatusRunning
 	r.tracker.Put(res)
