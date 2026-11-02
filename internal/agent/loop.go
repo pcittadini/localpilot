@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pcittadini/localpilot/internal/models"
 	"github.com/pcittadini/localpilot/internal/policy"
@@ -47,6 +48,26 @@ type session struct {
 	maxOut    int
 	budget    int
 	cov       *coverage
+	observe   Observer
+
+	// Accounting for the task Record.
+	calls          []ModelCall
+	workspaceBytes int
+	toolBytes      int
+}
+
+func (s *session) emit(st Step) {
+	if s.observe != nil {
+		st.Model = s.spec.Name
+		s.observe(st)
+	}
+}
+
+// called records a finished model call and reports it.
+func (s *session) called(iter, maxIter int, d time.Duration, usage models.Usage, outcome string) {
+	s.calls = append(s.calls, ModelCall{Duration: d, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, Outcome: outcome})
+	s.emit(Step{Kind: StepModel, Iteration: iter, MaxIterations: maxIter, Duration: d,
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, Outcome: outcome})
 }
 
 // converse runs the model until it produces a final answer. Without tools it
@@ -96,7 +117,22 @@ func (r *Runtime) converse(ctx, parent context.Context, res *Result, s *session,
 		}
 		req.Messages = msgs
 
+		s.emit(Step{Kind: StepModelStart, Iteration: iter, MaxIterations: maxIter})
+		callStart := time.Now()
 		resp, err := s.spec.Provider.Chat(ctx, req)
+		elapsed := time.Since(callStart)
+		switch {
+		case errors.Is(err, models.ErrMalformedOutput):
+			s.called(iter, maxIter, elapsed, models.Usage{}, OutcomeMalformed)
+		case err != nil:
+			s.called(iter, maxIter, elapsed, models.Usage{}, OutcomeError)
+		case resp.FinishReason == models.FinishLength:
+			s.called(iter, maxIter, elapsed, resp.Usage, OutcomeTruncated)
+		case len(resp.Message.ToolCalls) > 0:
+			s.called(iter, maxIter, elapsed, resp.Usage, OutcomeToolCalls)
+		default:
+			s.called(iter, maxIter, elapsed, resp.Usage, OutcomeAnswer)
+		}
 		if errors.Is(err, models.ErrMalformedOutput) && !final {
 			// A broken tool call: record it, then retry once with a
 			// correction before forcing a tool-free answer.
@@ -192,6 +228,8 @@ func (r *Runtime) runTool(ctx context.Context, res *Result, s *session, tc model
 	use := ToolUse{Tool: tc.Name}
 	defer func() {
 		res.Trace = append(res.Trace, use)
+		s.emit(Step{Kind: StepTool, Tool: use.Tool, Target: use.Target, Status: use.Status,
+			Duration: time.Duration(use.DurationMS) * time.Millisecond})
 		r.log.Debug("tool call", "task_id", res.TaskID, "tool", use.Tool, "target", use.Target,
 			"status", use.Status, "duration_ms", use.DurationMS)
 	}()
@@ -229,6 +267,7 @@ func (r *Runtime) runTool(ctx context.Context, res *Result, s *session, tc model
 			"Request a smaller part (for example a narrower line range), or answer with what you have.", need, max(room, 0)), false
 	}
 	s.cov.add(call.Viewed)
+	s.toolBytes += len(call.Content)
 	res.Metrics.Redactions += call.Redactions
 	return call.Content, false
 }

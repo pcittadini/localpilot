@@ -5,10 +5,10 @@
 // environment variables.
 //
 // Precedence (lowest to highest): built-in defaults, the global config file,
-// environment variable overrides. Project-level configuration is deliberately
-// not loaded yet: it arrives with the policy engine (Phase 3), which can
-// guarantee that a project file never grants capabilities the global file
-// forbids.
+// environment variable overrides. Project-level configuration is loaded by
+// the policy package, which guarantees that a project file only narrows
+// delegation and never touches the settings here that decide where data is
+// sent or stored.
 package config
 
 import (
@@ -32,6 +32,7 @@ const (
 	EnvModel       = "LOCALPILOT_MODEL"
 	EnvLogLevel    = "LOCALPILOT_LOG_LEVEL"
 	EnvLogFile     = "LOCALPILOT_LOG_FILE"
+	EnvMetricsPath = "LOCALPILOT_METRICS_PATH"
 	currentVersion = 1
 )
 
@@ -41,6 +42,8 @@ type Config struct {
 	Providers  Providers  `yaml:"providers"`
 	Models     Models     `yaml:"models"`
 	Delegation Delegation `yaml:"delegation"`
+	Metrics    Metrics    `yaml:"metrics"`
+	Savings    Savings    `yaml:"savings"`
 	Logging    Logging    `yaml:"logging"`
 
 	// Source is the file the configuration was read from, or "" when only
@@ -128,6 +131,42 @@ type CategoryPolicy struct {
 	Budgets Budgets `yaml:"budgets,omitempty"`
 }
 
+// Metrics controls the local task database. It stores counts, timings,
+// statuses and token estimates; never prompts, source code or file contents.
+type Metrics struct {
+	Enabled bool `yaml:"enabled"`
+	// Path is the SQLite database file. Empty uses DefaultMetricsPath.
+	Path string `yaml:"path"`
+	// RetentionDays deletes task records older than this at startup;
+	// 0 keeps them forever.
+	RetentionDays int `yaml:"retention_days"`
+}
+
+// Billing modes decide how savings are reported.
+const (
+	// BillingSubscription reports usage avoided and its API-equivalent
+	// value, never money saved.
+	BillingSubscription = "subscription"
+	// BillingAPI reports the estimated API spend avoided.
+	BillingAPI = "api"
+)
+
+// Savings configures how delegated work is valued in Claude terms.
+type Savings struct {
+	Billing string `yaml:"billing"`
+	// ReferenceModel is the Claude model the work would otherwise have run
+	// on; it must be listed in Pricing.
+	ReferenceModel string `yaml:"reference_model"`
+	// Pricing lists Claude prices in USD per million tokens.
+	Pricing []ModelPrice `yaml:"pricing"`
+}
+
+type ModelPrice struct {
+	Model  string  `yaml:"model"`
+	Input  float64 `yaml:"input"`
+	Output float64 `yaml:"output"`
+}
+
 type Logging struct {
 	Level string `yaml:"level"`
 	// File receives logs when set; otherwise they go to stderr. Logs never go
@@ -180,8 +219,36 @@ func Default() *Config {
 				MaxResultBytes: 8000,
 			},
 		},
+		Metrics: Metrics{Enabled: true, RetentionDays: 180},
+		Savings: Savings{
+			Billing:        BillingSubscription,
+			ReferenceModel: "claude-opus-5-5",
+			// Anthropic first-party API list prices, October 2026.
+			Pricing: []ModelPrice{
+				{Model: "claude-fable-5-1", Input: 10, Output: 50},
+				{Model: "claude-opus-5-5", Input: 4, Output: 20},
+				{Model: "claude-sonnet-5-5", Input: 2, Output: 10},
+				{Model: "claude-haiku-5-5", Input: 0.10, Output: 0.50},
+			},
+		},
 		Logging: Logging{Level: "info"},
 	}
+}
+
+// DefaultMetricsPath returns $XDG_DATA_HOME/localpilot/metrics.db, or
+// ~/.local/share/localpilot/metrics.db when XDG_DATA_HOME is unset.
+func DefaultMetricsPath(getenv func(string) string) string {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	if dir := getenv("XDG_DATA_HOME"); filepath.IsAbs(dir) {
+		return filepath.Join(dir, "localpilot", "metrics.db")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "localpilot", "metrics.db")
 }
 
 // LoadOptions controls where Load looks for configuration.
@@ -236,6 +303,9 @@ func Load(opts LoadOptions) (*Config, error) {
 	}
 
 	applyEnv(cfg, getenv)
+	if cfg.Metrics.Path == "" {
+		cfg.Metrics.Path = DefaultMetricsPath(getenv)
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -285,6 +355,9 @@ func applyEnv(cfg *Config, getenv func(string) string) {
 	}
 	if v := getenv(EnvLogFile); v != "" {
 		cfg.Logging.File = v
+	}
+	if v := getenv(EnvMetricsPath); v != "" {
+		cfg.Metrics.Path = v
 	}
 }
 
@@ -353,6 +426,33 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if m := c.Metrics; m.RetentionDays < 0 {
+		add("metrics.retention_days: must not be negative (0 keeps records forever)")
+	} else if m.Enabled && m.Path != "" && !filepath.IsAbs(m.Path) {
+		add("metrics.path: must be an absolute path, got %q", m.Path)
+	}
+
+	sv := c.Savings
+	if sv.Billing != BillingSubscription && sv.Billing != BillingAPI {
+		add("savings.billing: must be %s or %s", BillingSubscription, BillingAPI)
+	}
+	priced := map[string]bool{}
+	for i, p := range sv.Pricing {
+		switch {
+		case p.Model == "":
+			add("savings.pricing[%d].model: required", i)
+		case priced[p.Model]:
+			add("savings.pricing[%d].model: duplicate %q", i, p.Model)
+		}
+		priced[p.Model] = true
+		if p.Input < 0 || p.Output < 0 {
+			add("savings.pricing[%d]: prices must not be negative", i)
+		}
+	}
+	if !priced[sv.ReferenceModel] {
+		add("savings.reference_model: %q has no entry in savings.pricing", sv.ReferenceModel)
+	}
+
 	switch strings.ToLower(c.Logging.Level) {
 	case "debug", "info", "warn", "error":
 	default:
@@ -399,7 +499,18 @@ func (c *Config) Clone() *Config {
 	}
 	out.Delegation.Tools.Allowed = append([]string(nil), c.Delegation.Tools.Allowed...)
 	out.Delegation.Tools.Denied = append([]string(nil), c.Delegation.Tools.Denied...)
+	out.Savings.Pricing = append([]ModelPrice(nil), c.Savings.Pricing...)
 	return &out
+}
+
+// Price returns the configured price of a Claude model.
+func (s Savings) Price(model string) (ModelPrice, bool) {
+	for _, p := range s.Pricing {
+		if p.Model == model {
+			return p, true
+		}
+	}
+	return ModelPrice{}, false
 }
 
 // CategoryEnabled reports whether the configuration enables a category.

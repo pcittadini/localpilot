@@ -10,6 +10,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pcittadini/localpilot/internal/agent"
+	"github.com/pcittadini/localpilot/internal/metrics"
 	"github.com/pcittadini/localpilot/internal/policy"
 	"github.com/pcittadini/localpilot/internal/tools"
 )
@@ -41,6 +42,12 @@ type ExcerptInput struct {
 	Content string `json:"content"`
 }
 
+// ReportInput is the get_savings_report argument object.
+type ReportInput struct {
+	Period string `json:"period,omitempty" jsonschema:"day, week, month (default) or all; rolling windows ending now"`
+	Scope  string `json:"scope,omitempty" jsonschema:"all (default) for every workspace, or workspace for the current one only"`
+}
+
 // StatusInput is the get_delegation_status argument object.
 type StatusInput struct {
 	TaskID string `json:"task_id" jsonschema:"task_id returned by delegate_task"`
@@ -50,6 +57,8 @@ const delegateDescription = `Delegate a bounded, read-only analysis task to a lo
 
 Good fits: extracting facts, summarizing files or logs, finding patterns or duplication in a few files, analyzing documentation.
 Do not use for architecture or security decisions, code changes, debugging that needs broad project understanding, or anything involving secrets.
+
+Delegating costs you a few hundred tokens (the request and its result), so it pays off when the local model reads more than that: several files, large files or long logs. For a single small file, read it yourself.
 
 The local model can explore the workspace on its own with read-only tools (read file, search code, list files, git diff, git log), so you may name a package or directory in the objective instead of listing every file. When you already know the relevant files, pass them in context: it saves the local model tool calls. Reference files by path or line range instead of pasting their contents; use excerpts only for text that is not in a file.
 
@@ -101,6 +110,28 @@ func statusTool() *mcpsdk.Tool {
 			OpenWorldHint:  boolPtr(false),
 		},
 	}
+}
+
+const reportDescription = `Report LocalPilot usage and estimated savings: tasks delegated (completed, escalated, failed, rejected), local model tokens, estimated Claude tokens avoided and their API-equivalent value. Claude figures are estimates, not measured billing; on a subscription the value is usage capacity preserved, not money saved. Relay the notes when presenting the numbers.`
+
+func reportTool() (*mcpsdk.Tool, error) {
+	schema, err := jsonschema.For[ReportInput](nil)
+	if err != nil {
+		return nil, fmt.Errorf("get_savings_report schema: %w", err)
+	}
+	schema.Properties["period"].Enum = []any{"day", "week", "month", "all"}
+	schema.Properties["scope"].Enum = []any{metrics.ScopeAll, metrics.ScopeWorkspace}
+	return &mcpsdk.Tool{
+		Name:        "get_savings_report",
+		Title:       "Get savings report",
+		Description: reportDescription,
+		InputSchema: schema,
+		Annotations: &mcpsdk.ToolAnnotations{
+			ReadOnlyHint:   true,
+			IdempotentHint: true,
+			OpenWorldHint:  boolPtr(false),
+		},
+	}, nil
 }
 
 func boolPtr(b bool) *bool { return &b }

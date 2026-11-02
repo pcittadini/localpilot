@@ -12,14 +12,18 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/pcittadini/localpilot/internal/agent"
 	"github.com/pcittadini/localpilot/internal/config"
+	"github.com/pcittadini/localpilot/internal/metrics"
 	"github.com/pcittadini/localpilot/internal/models"
 	"github.com/pcittadini/localpilot/internal/policy"
+	"github.com/pcittadini/localpilot/internal/storage"
 	"github.com/pcittadini/localpilot/internal/tools"
 	"github.com/pcittadini/localpilot/internal/workspace"
 )
@@ -42,6 +46,20 @@ func (s stubProvider) Describe(context.Context, string) (models.ModelInfo, error
 
 func connect(t *testing.T, reply string, mutate func(*config.Config)) *mcpsdk.ClientSession {
 	t.Helper()
+	return dial(t, setup{reply: reply, mutate: mutate})
+}
+
+type setup struct {
+	reply  string
+	mutate func(*config.Config)
+	// metrics records tasks in a temporary database and serves reports.
+	metrics bool
+	client  *mcpsdk.ClientOptions
+}
+
+func dial(t *testing.T, opts setup) *mcpsdk.ClientSession {
+	t.Helper()
+	reply, mutate := opts.reply, opts.mutate
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -63,7 +81,18 @@ func connect(t *testing.T, reply string, mutate func(*config.Config)) *mcpsdk.Cl
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := NewServer(agent.NewRuntime(cfg, reg, ws, nil, engine, log), engine, "test", log)
+	rt := agent.NewRuntime(cfg, reg, ws, nil, engine, log)
+	var reports Reports
+	if opts.metrics {
+		store, err := storage.Open(context.Background(), filepath.Join(t.TempDir(), "metrics.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { store.Close() })
+		rt.SetRecorder(metrics.NewRecorder(store, ws.Path(), cfg.Savings, log))
+		reports = metrics.NewReporter(store, cfg.Savings, ws.Path())
+	}
+	server, err := NewServer(rt, engine, reports, "test", log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +104,7 @@ func connect(t *testing.T, reply string, mutate func(*config.Config)) *mcpsdk.Cl
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ss.Close() })
-	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "1"}, nil)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "1"}, opts.client)
 	cs, err := client.Connect(ctx, clientT, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -97,10 +126,16 @@ func decodeResult(t *testing.T, res *mcpsdk.CallToolResult) agent.Result {
 	if err := json.Unmarshal(data, &out); err != nil {
 		t.Fatal(err)
 	}
-	// The text content mirrors the structured result for clients that
-	// ignore structuredContent.
-	if text, ok := res.Content[0].(*mcpsdk.TextContent); !ok || !strings.Contains(text.Text, out.TaskID) {
+	// The last text block mirrors the structured result for clients that
+	// ignore structuredContent; delegate_task puts a one-line summary first.
+	last, ok := res.Content[len(res.Content)-1].(*mcpsdk.TextContent)
+	if !ok || !strings.Contains(last.Text, out.TaskID) {
 		t.Errorf("text content = %v", res.Content)
+	}
+	if len(res.Content) > 1 {
+		if first, ok := res.Content[0].(*mcpsdk.TextContent); !ok || first.Text != out.Summary() {
+			t.Errorf("summary content = %v, want %q", res.Content[0], out.Summary())
+		}
 	}
 	return out
 }
@@ -115,8 +150,11 @@ func TestListTools(t *testing.T) {
 	for _, tool := range res.Tools {
 		tools[tool.Name] = tool
 	}
-	if len(tools) != 2 || tools["delegate_task"] == nil || tools["get_delegation_status"] == nil {
+	if len(tools) != 3 || tools["delegate_task"] == nil || tools["get_delegation_status"] == nil || tools["get_savings_report"] == nil {
 		t.Fatalf("tools = %v", tools)
+	}
+	if r := tools["get_savings_report"]; r.Annotations == nil || !r.Annotations.ReadOnlyHint || r.OutputSchema == nil {
+		t.Errorf("get_savings_report metadata: %+v", r)
 	}
 
 	d := tools["delegate_task"]
@@ -262,5 +300,127 @@ func TestServerStartsWithEveryCategoryDisabled(t *testing.T) {
 	}
 	if out := decodeResult(t, call); out.Status != agent.StatusRejected || !strings.Contains(out.Escalation.Detail, "disabled") {
 		t.Errorf("result = %+v", out)
+	}
+}
+
+const okReply = `{"summary":"main is empty","findings":[],"complete":true,"limitations":""}`
+
+func TestDelegateReportsProgress(t *testing.T) {
+	var mu sync.Mutex
+	var got []*mcpsdk.ProgressNotificationParams
+	cs := dial(t, setup{reply: okReply, client: &mcpsdk.ClientOptions{
+		ProgressNotificationHandler: func(_ context.Context, req *mcpsdk.ProgressNotificationClientRequest) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, req.Params)
+		},
+	}})
+	params := &mcpsdk.CallToolParams{Name: "delegate_task", Arguments: map[string]any{
+		"category": "summarization", "objective": "Summarize main.go", "context": map[string]any{"files": []any{"main.go"}},
+	}}
+	params.SetProgressToken("tok-1")
+	res, err := cs.CallTool(context.Background(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := decodeResult(t, res); out.Status != agent.StatusCompleted {
+		t.Fatalf("result = %+v", out)
+	}
+
+	// Notifications may still be in flight when the response arrives.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	// Without tools the task is one model call: a start and a finish.
+	if len(got) != 2 {
+		t.Fatalf("got %d progress notifications: %+v", len(got), got)
+	}
+	for i, p := range got {
+		if p.ProgressToken != "tok-1" || p.Progress != float64(i+1) {
+			t.Errorf("notification %d = %+v", i, p)
+		}
+	}
+	if !strings.Contains(got[0].Message, "model call 1 of up to 1") || !strings.Contains(got[1].Message, "finished") {
+		t.Errorf("messages = %q, %q", got[0].Message, got[1].Message)
+	}
+}
+
+func TestDelegateWithoutProgressToken(t *testing.T) {
+	called := false
+	cs := dial(t, setup{reply: okReply, client: &mcpsdk.ClientOptions{
+		ProgressNotificationHandler: func(context.Context, *mcpsdk.ProgressNotificationClientRequest) { called = true },
+	}})
+	res, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "delegate_task", Arguments: map[string]any{
+		"category": "summarization", "objective": "Summarize main.go", "context": map[string]any{"files": []any{"main.go"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodeResult(t, res)
+	time.Sleep(50 * time.Millisecond)
+	if called {
+		t.Error("progress was sent although the client did not ask for it")
+	}
+}
+
+func TestSavingsReport(t *testing.T) {
+	cs := dial(t, setup{reply: okReply, metrics: true})
+	ctx := context.Background()
+	for _, args := range []map[string]any{
+		{"category": "summarization", "objective": "Summarize main.go", "context": map[string]any{"files": []any{"main.go"}}},
+		{"category": "summarization", "objective": "Summarize", "context": map[string]any{"files": []any{"../outside.go"}}},
+	} {
+		if _, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "delegate_task", Arguments: args}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "get_savings_report", Arguments: map[string]any{"period": "day"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("report error: %v", res.Content)
+	}
+	data, _ := json.Marshal(res.StructuredContent)
+	var rep metrics.Report
+	if err := json.Unmarshal(data, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Period != "day" || rep.Tasks.Total != 2 || rep.Tasks.Completed != 1 || rep.Tasks.Rejected != 1 || rep.Tasks.SuccessRate != 1 {
+		t.Errorf("tasks = %+v", rep.Tasks)
+	}
+	if rep.Local.ModelCalls != 1 || rep.Local.InputTokens != 50 || rep.Claude.InputTokensAvoided == 0 {
+		t.Errorf("usage = %+v / %+v", rep.Local, rep.Claude)
+	}
+	// Subscription is the default: the value is never presented as savings.
+	if rep.BillingMode != config.BillingSubscription || rep.EstimatedSavingsUSD != nil || len(rep.Notes) == 0 {
+		t.Errorf("billing = %q, savings = %v, notes = %v", rep.BillingMode, rep.EstimatedSavingsUSD, rep.Notes)
+	}
+
+	res, err = cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "get_savings_report", Arguments: map[string]any{"period": "year"}})
+	if err == nil && !res.IsError {
+		t.Error("an unknown period must be rejected")
+	}
+}
+
+func TestSavingsReportWithoutMetrics(t *testing.T) {
+	cs := connect(t, okReply, nil)
+	res, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "get_savings_report", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _ := res.Content[0].(*mcpsdk.TextContent)
+	if !res.IsError || text == nil || !strings.Contains(text.Text, "metrics are disabled") {
+		t.Errorf("result = %+v", res)
 	}
 }

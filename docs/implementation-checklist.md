@@ -59,11 +59,24 @@ Acceptance criteria (all tested)
 - [x] Budget limits are enforced: per-category tool-call, iteration and timeout budgets drive the loop (unit tests); live, a project cap of 3 tool calls held
 - [x] Project configuration cannot override global security restrictions: a widening-attempt test, a property test that the effective policy is never wider, a mutation check, a forbidden-keys test, symlink and malformed-file fail-closed tests, and a live hostile-config test
 
-## Phase 4: Metrics and savings
+## Phase 4: Metrics and savings ✅
 
-- [ ] SQLite with migrations; task, usage and tool-call records
-- [ ] Configurable Claude pricing; API-equivalent savings; subscription estimates labelled as estimates
-- [ ] `get_savings_report`
+Objectives
+- [x] SQLite through the pure-Go `modernc.org/sqlite` driver, so the binary still builds without cgo (`internal/storage`)
+- [x] Migrations: append-only, versioned with `user_version`, safe across concurrent processes
+- [x] Every task recorded: task, usage, tool calls and model calls (`internal/metrics/recorder.go`), with no task content
+- [x] Local inference usage recorded per model call (tokens, duration, outcome)
+- [x] Configurable Claude pricing per model and a reference model (`savings`)
+- [x] Savings calculation: avoided minus overhead, per task and per report (`internal/metrics/pricing.go`)
+- [x] `get_savings_report` MCP tool and `localpilot report` CLI
+- [x] Visibility in Claude Code, added by request: `localpilot hook` for PreToolUse, PostToolUse and PostToolUseFailure messages; a one-line summary at the top of each result; MCP progress notifications per step
+
+Acceptance criteria (all tested)
+- [x] Every task generates a metrics record: runtime tests for completed, rejected (invalid request, policy), provider-failure and malformed-call tasks; MCP and live tests read the records back
+- [x] Successful and failed tasks are distinguishable: status and escalation reason stored per task, with report counts for completed, escalated, failed and rejected
+- [x] API-equivalent savings can be calculated: pricing, estimate and report tests, including net-negative tasks
+- [x] Subscription estimates are clearly distinguished from monetary savings: subscription reports omit `estimated_savings_usd` and say "not money saved"; api reports include it (unit, MCP and live tests)
+- [x] No source code or prompts persisted: marker tests over the database files, unit and live
 
 ## Phase 5: Validation and shadow mode
 

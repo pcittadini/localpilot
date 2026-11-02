@@ -41,9 +41,25 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// server is a running LocalPilot binary with its own configuration and
+// metrics database, so tests never touch the user's.
+type server struct {
+	cs      *mcpsdk.ClientSession
+	stderr  *syncBuffer
+	bin     string
+	config  string
+	metrics string
+}
+
 // startServer builds the binary and connects to it over stdio, the way
 // Claude Code does.
 func startServer(t *testing.T, workspace string) (*mcpsdk.ClientSession, *syncBuffer) {
+	t.Helper()
+	s := launch(t, workspace)
+	return s.cs, s.stderr
+}
+
+func launch(t *testing.T, workspace string) *server {
 	t.Helper()
 	url, model := liveOllama(t)
 	dir := t.TempDir()
@@ -71,15 +87,17 @@ models:
       max_tokens: 2048
       context_window: 8192
       think: false
+metrics:
+  path: %s
 logging:
   level: info
-`, url, model)
+`, url, model, filepath.Join(dir, "data", "metrics.db"))
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	cmd := exec.Command(bin, "serve", "--workspace", workspace)
-	cmd.Env = append(os.Environ(), "LOCALPILOT_CONFIG="+cfgPath)
+	cmd.Env = append(os.Environ(), "LOCALPILOT_CONFIG="+cfgPath, "LOCALPILOT_METRICS_PATH="+filepath.Join(dir, "data", "metrics.db"))
 	stderr := &syncBuffer{}
 	cmd.Stderr = stderr
 
@@ -89,7 +107,7 @@ logging:
 		t.Fatalf("connect: %v\nstderr:\n%s", err, stderr.String())
 	}
 	t.Cleanup(func() { cs.Close() })
-	return cs, stderr
+	return &server{cs: cs, stderr: stderr, bin: bin, config: cfgPath, metrics: filepath.Join(dir, "data", "metrics.db")}
 }
 
 func hashTree(t *testing.T, root string) string {
@@ -145,7 +163,7 @@ func TestEndToEndDuplicatedAuthLogic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 2 {
+	if len(tools.Tools) != 3 {
 		t.Fatalf("tools = %d", len(tools.Tools))
 	}
 

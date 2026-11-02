@@ -76,6 +76,12 @@ func TestValidateErrors(t *testing.T) {
 		"duplicate category":       "delegation:\n  policies:\n    - {category: extraction, enabled: true}\n    - {category: extraction, enabled: false}\n",
 		"unknown category model":   "delegation:\n  policies:\n    - {category: extraction, enabled: true, model: nope}\n",
 		"negative category budget": "delegation:\n  policies:\n    - {category: extraction, enabled: true, budgets: {max_tool_calls: -1}}\n",
+		"relative metrics path":    "metrics:\n  path: data/metrics.db\n",
+		"negative retention":       "metrics:\n  retention_days: -1\n",
+		"unknown billing":          "savings:\n  billing: free\n",
+		"unpriced reference model": "savings:\n  reference_model: claude-3-opus\n",
+		"negative price":           "savings:\n  pricing:\n    - {model: claude-opus-5-5, input: -4, output: 20}\n",
+		"duplicate price":          "savings:\n  pricing:\n    - {model: claude-opus-5-5, input: 4, output: 20}\n    - {model: claude-opus-5-5, input: 5, output: 25}\n",
 	}
 	for name, yml := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -133,6 +139,21 @@ func TestLoadSources(t *testing.T) {
 		}
 	})
 
+	t.Run("metrics path", func(t *testing.T) {
+		cfg, err := Load(LoadOptions{Path: file, Getenv: env(map[string]string{"XDG_DATA_HOME": "/data"})})
+		if err != nil || cfg.Metrics.Path != "/data/localpilot/metrics.db" {
+			t.Fatalf("XDG path = %q, %v", cfg.Metrics.Path, err)
+		}
+		cfg, err = Load(LoadOptions{Path: file, Getenv: env(map[string]string{"XDG_DATA_HOME": "relative", EnvMetricsPath: "/tmp/m.db"})})
+		if err != nil || cfg.Metrics.Path != "/tmp/m.db" {
+			t.Fatalf("env path = %q, %v", cfg.Metrics.Path, err)
+		}
+		cfg, err = Load(LoadOptions{Path: file, Getenv: env(map[string]string{"XDG_DATA_HOME": "relative"})})
+		if err != nil || !strings.HasSuffix(cfg.Metrics.Path, filepath.Join(".local", "share", "localpilot", "metrics.db")) {
+			t.Fatalf("a relative XDG_DATA_HOME must be ignored: %q, %v", cfg.Metrics.Path, err)
+		}
+	})
+
 	t.Run("invalid env override", func(t *testing.T) {
 		if _, err := Load(LoadOptions{Path: file, Getenv: env(map[string]string{EnvOllamaURL: "nope"})}); err == nil {
 			t.Fatal("expected validation error")
@@ -169,6 +190,25 @@ func TestShippedDefaultConfigMatchesDefaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg, Default()) {
 		t.Errorf("configs/default.yaml differs from Default():\n got %+v\nwant %+v", cfg, Default())
+	}
+}
+
+func TestSavingsConfig(t *testing.T) {
+	cfg, err := Parse([]byte("savings:\n  billing: api\n  reference_model: claude-sonnet-5-5\n  pricing:\n    - {model: claude-sonnet-5-5, input: 2.5, output: 12}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A pricing list replaces the defaults rather than merging with them.
+	if p, ok := cfg.Savings.Price("claude-sonnet-5-5"); !ok || p.Input != 2.5 || len(cfg.Savings.Pricing) != 1 {
+		t.Errorf("pricing = %+v", cfg.Savings.Pricing)
+	}
+	if _, ok := cfg.Savings.Price("claude-opus-5-5"); ok {
+		t.Error("default prices leaked into a custom list")
+	}
+	clone := cfg.Clone()
+	clone.Savings.Pricing[0].Input = 99
+	if cfg.Savings.Pricing[0].Input != 2.5 {
+		t.Error("Clone shares the pricing list")
 	}
 }
 

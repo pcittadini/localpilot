@@ -78,6 +78,35 @@ delegation:
     timeout_seconds: 10        # per tool call
     max_result_bytes: 8000     # per tool result returned to the model
 
+# Local task database. It stores counts, timings, statuses and token
+# estimates per task; never prompts, objectives, source code, file paths read
+# by the model or tool output. The file and its directory are created
+# private to the user. Only this global file can set these keys.
+metrics:
+  enabled: true
+  path: ""                     # empty: $XDG_DATA_HOME/localpilot/metrics.db or ~/.local/share/localpilot/metrics.db
+  retention_days: 180          # tasks older than this are deleted at startup; 0 keeps them
+
+# How delegated work is valued in Claude terms (see get_savings_report).
+# Claude token counts are estimates; local token counts are measured.
+savings:
+  billing: subscription        # subscription: usage avoided and its API-equivalent value, never "money saved"
+                               # api: estimated API spend avoided
+  reference_model: claude-opus-5-5   # the Claude model the work would otherwise have run on
+  pricing:                     # USD per million tokens; Anthropic API list prices, October 2026
+    - model: claude-fable-5-1
+      input: 10.00
+      output: 50.00
+    - model: claude-opus-5-5
+      input: 4.00
+      output: 20.00
+    - model: claude-sonnet-5-5
+      input: 2.00
+      output: 10.00
+    - model: claude-haiku-5-5  # prompts up to 100K tokens
+      input: 0.10
+      output: 0.50
+
 logging:
   level: info                  # debug, info, warn, error
   file: ""                     # empty: stderr (never stdout, which carries MCP messages)

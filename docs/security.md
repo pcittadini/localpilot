@@ -12,6 +12,8 @@ This document describes what LocalPilot protects, whom it trusts, how it enforce
 | Local model output | **Untrusted** | It can be wrong, fabricated, or steered by prompt injection. Every tool call it requests is checked; its answer is validated. |
 | Workspace content (code, docs, logs, git history) | **Untrusted** | It may contain prompt-injection text. It is passed to the model as data inside delimited blocks, never as instructions. |
 | Ollama server | Trusted to run inference | It receives workspace content in prompts. See [Data flow](#data-flow). |
+| Metrics database | Local, user-private | Written by LocalPilot only. Holds no task content (see [Logging and persistence](#controls)). Its location is set only by the global configuration or environment. |
+| Claude Code hook input | Validated input | `localpilot hook` reads Claude Code's hook payload on stdin and only ever prints a message. |
 
 ## Assets
 
@@ -62,7 +64,17 @@ This document describes what LocalPilot protects, whom it trusts, how it enforce
 **Logging and persistence**
 - Logs go to stderr or a file created with mode 0600, never to stdout, which carries MCP messages.
 - Logs record task IDs, statuses, timings and token counts, never prompts, file contents or tool output.
-- Nothing is persisted to disk by default.
+- The metrics database (`metrics.path`) records one row per task, plus one per model call and per tool call. A row holds identifiers, counts, timings, statuses, the escalation reason, the policy version and token estimates. It never holds prompts, objectives, excerpts, source code, file paths read by the model, search patterns, tool output, error text or model answers. A test plants a marker in every one of those and asserts it never reaches the database files.
+- Names that come from the model or the request are reduced before storage. A tool name the model invents is stored as `(unknown)`. A category that is not a plain lowercase identifier is stored as `(invalid)`. So neither can carry text into the database.
+- The database directory is created with mode 0700 and the file with mode 0600; wider existing permissions are tightened. SQLite gives its journal files the file's permissions.
+- Records older than `metrics.retention_days` (default 180) are deleted at startup. `metrics.enabled: false` turns recording off.
+- A project configuration cannot set `metrics` or `savings`: a cloned repository cannot choose where LocalPilot writes.
+- Metrics are not a security control. If the database cannot be opened, LocalPilot logs a warning and keeps delegating without recording.
+
+**Claude Code hook**
+- `localpilot hook` reads at most 4 MB from stdin and opens the metrics database read-only. It never creates or migrates the database, and makes no network calls.
+- It only prints a `systemMessage`, shown to the user and not sent to Claude. It never returns permission decisions or modified input, and always exits 0. Any problem results in no output.
+- Text taken from the request (the objective) is shortened to one line and stripped of control characters before display.
 
 ## Data flow
 
@@ -76,6 +88,7 @@ Workspace content is sent to the configured Ollama server inside prompts. Ollama
 - **Redaction is a safety net, not a guarantee.** A secret hard-coded in an ordinary source file, in a format the patterns do not recognize, reaches the local model. It stays within your machine and your Ollama server, but keep secrets out of source code.
 - **Prompt injection can bias answers.** Repository text can try to steer the local model. It cannot grant tools, change budgets or escape the workspace, and fabricated locations are caught. A misleading summary of real code is still possible, so Claude must verify important findings, as the skill instructs.
 - **Repository-local git filters.** Clean/smudge filter programs defined in the repository's own `.git/config` can still run during `git diff`. That file is not part of a clone, so this only affects repositories whose local config someone has already modified.
+- **Savings are estimates.** Claude token counts are approximated from byte sizes, and the baseline (what Claude would have done without LocalPilot) is a model, not a measurement. The report and hook say so, and never present subscription usage as money saved.
 - **Evidence checks prove location, not meaning.** A cited line exists and was shown to the model; whether it supports the finding is not yet verified (planned for Phase 5).
 - **Single-user trust model.** LocalPilot assumes the user running it owns the workspace and configuration. It is not designed to sandbox one user from another.
 
