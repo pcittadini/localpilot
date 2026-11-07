@@ -82,3 +82,27 @@ Acceptance criteria (all tested)
 
 - [ ] Evidence content correspondence (cited lines contain what the finding claims)
 - [ ] Shadow execution and per-category quality benchmarks
+
+## Phase 6: Patch delegation (proposed)
+
+Design: [proposals/patch-delegation.md](proposals/patch-delegation.md). Depends on Phase 5's shadow mode and benchmarks.
+
+Objectives
+- [ ] `code_generation` prompt, edit schema and parser: line-anchored edits verified against the original lines
+- [ ] Edit validation: workspace, sensitive and protected paths, full-range coverage, no overlaps, size limits, secret checks
+- [ ] One correction turn for failed edits, within the iteration budget
+- [ ] Diff rendering and an in-memory patch store with expiry and single use
+- [ ] Workspace write path: hash check, temporary file and rename, rollback; the only write in LocalPilot
+- [ ] `apply_patch` MCP tool, registered only when the global configuration enables `code_generation`
+- [ ] `patches` configuration, built-in protected paths, project narrowing, context-window warning
+- [ ] Metrics: patch counts and apply outcome without content; avoided tokens counted only on apply
+- [ ] Hook messages for proposed, applied and refused patches
+
+Acceptance criteria
+- [ ] No model output can cause a write: only `apply_patch` writes, and a test enforces that file-writing calls appear only in the workspace write path and the log and metrics code
+- [ ] A patch never applies to a file that changed after it was validated, and never partially
+- [ ] Sensitive and protected files cannot be changed, by any configuration or project file
+- [ ] Edits to lines the model was not shown, and edits touching redacted secrets, are rejected
+- [ ] A cloned repository cannot enable `code_generation` or shorten the protected list
+- [ ] No patch content, diff or path reaches the metrics database (marker test)
+- [ ] Reports separate proposed, applied and refused patches, and count savings only for applied ones
